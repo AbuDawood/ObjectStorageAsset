@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <PackageId>Elf.ObjectStorageAsset.Helpers</PackageId>
+    <AssemblyName>Elf.ObjectStorageAsset.Helpers</AssemblyName>
+    <RootNamespace>Elf.ObjectStorageAsset.Helpers</RootNamespace>
+  </PropertyGroup>
+
+</Project>

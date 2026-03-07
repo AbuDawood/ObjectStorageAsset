@@ -1,0 +1,40 @@
+# Build outputs
+[Bb]in/
+[Oo]bj/
+[Dd]ebug/
+[Rr]elease/
+[Oo]ut/
+
+# IDE files
+.vs/
+.idea/
+*.suo
+*.user
+*.userosscache
+*.rsuser
+*.sln.docstates
+
+# Test and coverage artifacts
+[Tt]est[Rr]esult*/
+BenchmarkDotNet.Artifacts/
+coverage*.json
+coverage*.xml
+coverage*.info
+*.coverage
+*.coveragexml
+
+# Package artifacts
+artifacts/
+*.nupkg
+*.snupkg
+
+# Repo-local scratch space
+sln-temp/
+
+# Logs
+*.log
+*.binlog
+
+# OS/editor noise
+.DS_Store
+Thumbs.db

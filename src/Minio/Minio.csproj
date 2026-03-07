@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <ProjectReference Include="..\Application\Application.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="9.0.4" />
+    <PackageReference Include="Minio" Version="7.0.0" />
+  </ItemGroup>
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <PackageId>Elf.ObjectStorageAsset.Minio</PackageId>
+    <AssemblyName>Elf.ObjectStorageAsset.Minio</AssemblyName>
+    <RootNamespace>Elf.ObjectStorageAsset.Minio</RootNamespace>
+  </PropertyGroup>
+
+</Project>
