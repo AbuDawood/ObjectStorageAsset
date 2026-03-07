@@ -55,6 +55,73 @@ public sealed class WorkflowTests
     }
 
     [Test]
+    public async Task ObjectAssetRegistry_ShouldRegisterDescriptors_ReadInBulk_AndRejectConflicts()
+    {
+        await using var fixture = await SqlServerFixture.CreateAsync();
+        using var scope = fixture.RootProvider.CreateScope();
+
+        var registry = scope.ServiceProvider.GetRequiredService<IObjectAssetRegistry>();
+        var firstDescriptor = CreateDescriptor(
+            Guid.NewGuid(),
+            "import-a.txt",
+            "text/plain",
+            12,
+            "hash-a",
+            "imports/import-a.txt");
+        var secondDescriptor = CreateDescriptor(
+            Guid.NewGuid(),
+            "import-b.txt",
+            "text/plain",
+            24,
+            "hash-b",
+            "imports/import-b.txt");
+
+        var added = await registry.RegisterDescriptorAsync(new ObjectAssetDescriptorRegistrationRequest
+        {
+            Descriptor = firstDescriptor,
+            OwnershipMode = ObjectAssetOwnershipMode.Referenced
+        });
+        var identical = await registry.RegisterDescriptorAsync(new ObjectAssetDescriptorRegistrationRequest
+        {
+            Descriptor = firstDescriptor,
+            OwnershipMode = ObjectAssetOwnershipMode.Referenced
+        });
+        var bulk = await registry.RegisterDescriptorsAsync(
+        [
+            new ObjectAssetDescriptorRegistrationRequest
+            {
+                Descriptor = secondDescriptor,
+                OwnershipMode = ObjectAssetOwnershipMode.Referenced
+            }
+        ]);
+
+        var conflictingDescriptor = CreateDescriptor(
+            firstDescriptor.AssetId,
+            "import-a-renamed.txt",
+            firstDescriptor.ContentType,
+            firstDescriptor.Length,
+            firstDescriptor.Hash,
+            firstDescriptor.ObjectKey);
+        var conflict = await registry.RegisterDescriptorAsync(new ObjectAssetDescriptorRegistrationRequest
+        {
+            Descriptor = conflictingDescriptor,
+            OwnershipMode = ObjectAssetOwnershipMode.Referenced
+        });
+
+        var descriptors = await registry.GetDescriptorsAsync([firstDescriptor.AssetId, secondDescriptor.AssetId]);
+
+        added.Outcome.Should().Be(ObjectAssetDescriptorRegistrationOutcome.Added);
+        identical.Outcome.Should().Be(ObjectAssetDescriptorRegistrationOutcome.IgnoredIdentical);
+        bulk.Should().ContainSingle();
+        bulk[0].Outcome.Should().Be(ObjectAssetDescriptorRegistrationOutcome.Added);
+        conflict.Outcome.Should().Be(ObjectAssetDescriptorRegistrationOutcome.RejectedConflict);
+        conflict.ConflictFields.Should().Contain(nameof(ObjectAssetDescriptor.FileName));
+        descriptors.Should().HaveCount(2);
+        descriptors[firstDescriptor.AssetId].ObjectKey.Should().Be(firstDescriptor.ObjectKey);
+        descriptors[secondDescriptor.AssetId].FileName.Should().Be(secondDescriptor.FileName);
+    }
+
+    [Test]
     public async Task SaveChangesWithAssetsAsync_ShouldReplaceSingleSlotAndDeletePreviousObject()
     {
         await using var fixture = await SqlServerFixture.CreateAsync();
@@ -97,6 +164,85 @@ public sealed class WorkflowTests
         fixture.StorageProvider.ContainsObject(firstAsset.ObjectKey).Should().BeFalse();
         fixture.StorageProvider.ObjectKeys.Should().HaveCount(1);
         assets.Single(x => x.Status == ObjectAssetStatus.Active).OriginalFileName.Should().Be("invoice-v2.pdf");
+    }
+
+    [Test]
+    public async Task TemporarySession_ShouldUploadImmediately_AndBulkFinalizeWithStableAssetIds()
+    {
+        await using var fixture = await SqlServerFixture.CreateAsync();
+        await using var hostDbContext = fixture.CreateHostDbContext();
+        using var scope = fixture.RootProvider.CreateScope();
+
+        var tempSessionFactory = scope.ServiceProvider.GetRequiredService<IObjectAssetTemporarySessionFactory>();
+        var bindingFinalizer = scope.ServiceProvider.GetRequiredService<IObjectAssetBindingFinalizer>();
+        var reader = scope.ServiceProvider.GetRequiredService<IObjectAssetReader>();
+        var contentReader = scope.ServiceProvider.GetRequiredService<IObjectAssetContentReader>();
+        var osaDbContext = scope.ServiceProvider.GetRequiredService<ObjectStorageAssetDbContext>();
+
+        var tempBindingOne = Guid.NewGuid();
+        var tempBindingTwo = Guid.NewGuid();
+        var tempInvoiceOne = await tempSessionFactory.For<Order>(
+                tempBindingOne,
+                DateTimeOffset.UtcNow.AddMinutes(15))
+            .SetSingleAsync(
+                OrderAssets.Invoice,
+                CreateStream("draft-invoice-1"),
+                "draft-invoice-1.pdf",
+                "application/pdf");
+        var tempInvoiceTwo = await tempSessionFactory.For<Order>(
+                tempBindingTwo,
+                DateTimeOffset.UtcNow.AddMinutes(15))
+            .SetSingleAsync(
+                OrderAssets.Invoice,
+                CreateStream("draft-invoice-2"),
+                "draft-invoice-2.pdf",
+                "application/pdf");
+
+        var tempContent = await contentReader.OpenReadAsync(tempInvoiceOne.AssetId);
+        tempContent.Should().NotBeNull();
+        await using (var stream = tempContent!.Content)
+        using (var readerStream = new StreamReader(stream, Encoding.UTF8))
+        {
+            (await readerStream.ReadToEndAsync()).Should().Be("draft-invoice-1");
+        }
+
+        var orderOne = new Order { Number = "ORD-TEMP-001" };
+        var orderTwo = new Order { Number = "ORD-TEMP-002" };
+        hostDbContext.Orders.AddRange(orderOne, orderTwo);
+        await hostDbContext.SaveChangesAsync();
+
+        var finalization = await bindingFinalizer.FinalizeTemporaryBindingsAsync(
+        [
+            new ObjectAssetTemporaryBindingFinalizationRequest<Order>
+            {
+                TemporaryBindingId = tempBindingOne,
+                Owner = orderOne
+            },
+            new ObjectAssetTemporaryBindingFinalizationRequest<Order>
+            {
+                TemporaryBindingId = tempBindingTwo,
+                Owner = orderTwo
+            }
+        ]);
+
+        var invoiceOne = await reader.GetSingleAsync(orderOne, OrderAssets.Invoice);
+        var invoiceTwo = await reader.GetSingleAsync(orderTwo, OrderAssets.Invoice);
+        var finalizedAssets = await osaDbContext.ObjectAssets
+            .AsNoTracking()
+            .Where(x => x.Id == tempInvoiceOne.AssetId || x.Id == tempInvoiceTwo.AssetId)
+            .OrderBy(x => x.CreatedAtUtc)
+            .ToArrayAsync();
+
+        finalization.Should().HaveCount(2);
+        finalization.Should().OnlyContain(x => x.FinalizedCount == 1);
+        invoiceOne.Should().NotBeNull();
+        invoiceOne!.AssetId.Should().Be(tempInvoiceOne.AssetId);
+        invoiceTwo.Should().NotBeNull();
+        invoiceTwo!.AssetId.Should().Be(tempInvoiceTwo.AssetId);
+        finalizedAssets.Should().HaveCount(2);
+        finalizedAssets.Should().OnlyContain(x => x.TemporaryBindingId == null);
+        finalizedAssets.Select(x => x.OwnerKeyInt64).Should().Contain((long)orderOne.Id);
+        finalizedAssets.Select(x => x.OwnerKeyInt64).Should().Contain((long)orderTwo.Id);
     }
 
     [Test]
@@ -157,6 +303,53 @@ public sealed class WorkflowTests
         summaries[orderOne.Id].Count.Should().Be(2);
         summaries[orderTwo.Id].Count.Should().Be(1);
         summaries[orderOne.Id].First!.FileName.Should().Be("attachment-b.txt");
+    }
+
+    [Test]
+    public async Task MaintenanceService_ShouldTrackExpiredTemporary_Unbound_AndReferencedAssets()
+    {
+        await using var fixture = await SqlServerFixture.CreateAsync();
+        using var scope = fixture.RootProvider.CreateScope();
+
+        var registry = scope.ServiceProvider.GetRequiredService<IObjectAssetRegistry>();
+        var tempSessionFactory = scope.ServiceProvider.GetRequiredService<IObjectAssetTemporarySessionFactory>();
+        var maintenanceService = scope.ServiceProvider.GetRequiredService<IObjectAssetMaintenanceService>();
+        var osaDbContext = scope.ServiceProvider.GetRequiredService<ObjectStorageAssetDbContext>();
+
+        var referencedDescriptor = CreateDescriptor(
+            Guid.NewGuid(),
+            "external.txt",
+            "text/plain",
+            8,
+            "external-hash",
+            "imports/external.txt");
+        await registry.RegisterDescriptorAsync(new ObjectAssetDescriptorRegistrationRequest
+        {
+            Descriptor = referencedDescriptor,
+            OwnershipMode = ObjectAssetOwnershipMode.Referenced
+        });
+
+        var tempAsset = await tempSessionFactory.For<Order>(
+                Guid.NewGuid(),
+                DateTimeOffset.UtcNow.AddMinutes(-2))
+            .AddAsync(
+                OrderAssets.Attachments,
+                CreateStream("temporary"),
+                "temporary.txt",
+                "text/plain");
+
+        var report = await maintenanceService.ReconcileAsync();
+        var expiredCount = await maintenanceService.ExpireAssetsAsync(DateTimeOffset.UtcNow);
+        var expiredAsset = await osaDbContext.ObjectAssets
+            .AsNoTracking()
+            .SingleAsync(x => x.Id == tempAsset.AssetId);
+
+        report.ExpiredTemporaryAssetIds.Should().Contain(tempAsset.AssetId);
+        report.UnboundAssetIds.Should().Contain(referencedDescriptor.AssetId);
+        report.ReferencedOnlyAssetIds.Should().Contain(referencedDescriptor.AssetId);
+        expiredCount.Should().Be(1);
+        expiredAsset.Status.Should().Be(ObjectAssetStatus.Deleted);
+        fixture.StorageProvider.ContainsObject(expiredAsset.ObjectKey).Should().BeFalse();
     }
 
     [Test]
@@ -349,6 +542,29 @@ public sealed class WorkflowTests
     private static MemoryStream CreateStream(string content)
     {
         return new MemoryStream(Encoding.UTF8.GetBytes(content));
+    }
+
+    private static ObjectAssetDescriptor CreateDescriptor(
+        Guid assetId,
+        string fileName,
+        string contentType,
+        long length,
+        string hash,
+        string objectKey)
+    {
+        return new ObjectAssetDescriptor
+        {
+            AssetId = assetId,
+            FileName = fileName,
+            ContentType = contentType,
+            Length = length,
+            Hash = hash,
+            Bucket = "osa-dev",
+            ObjectKey = objectKey,
+            CreatedAtUtc = DateTimeOffset.UtcNow.AddMinutes(-10),
+            ExpiresAtUtc = null,
+            DescriptorVersion = ObjectAssetDescriptor.CurrentVersion
+        };
     }
 
     private sealed class SqlServerFixture : IAsyncDisposable

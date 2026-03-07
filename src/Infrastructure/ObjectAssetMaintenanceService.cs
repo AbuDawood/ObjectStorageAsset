@@ -9,12 +9,14 @@ namespace Elf.ObjectStorageAsset.Infrastructure;
 internal sealed class ObjectAssetMaintenanceService(
     ObjectStorageAssetDbContext objectStorageAssetDbContext,
     IObjectStorageProvider objectStorageProvider,
-    ObjectStorageAssetRuntimeOptions runtimeOptions)
+    ObjectStorageAssetRuntimeOptions runtimeOptions,
+    ObjectAssetLifecycleManager lifecycleManager)
     : IObjectAssetMaintenanceService
 {
     private readonly ObjectStorageAssetDbContext _objectStorageAssetDbContext = objectStorageAssetDbContext;
     private readonly IObjectStorageProvider _objectStorageProvider = objectStorageProvider;
     private readonly ObjectStorageAssetRuntimeOptions _runtimeOptions = runtimeOptions;
+    private readonly ObjectAssetLifecycleManager _lifecycleManager = lifecycleManager;
 
     public async Task<int> ExpireAssetsAsync(
         DateTimeOffset? utcNow = null,
@@ -23,22 +25,21 @@ internal sealed class ObjectAssetMaintenanceService(
         var effectiveUtcNow = utcNow ?? DateTimeOffset.UtcNow;
         var expiredAssets = await _objectStorageAssetDbContext.ObjectAssets
             .Where(x => x.Status == ObjectAssetStatus.Active
-                        && x.ExpiresAtUtc.HasValue
-                        && x.ExpiresAtUtc <= effectiveUtcNow)
+                        && ((x.ExpiresAtUtc.HasValue && x.ExpiresAtUtc <= effectiveUtcNow)
+                            || (x.TemporaryBindingId.HasValue
+                                && x.TemporaryBindingExpiresAtUtc.HasValue
+                                && x.TemporaryBindingExpiresAtUtc <= effectiveUtcNow)))
             .ToListAsync(cancellationToken)
             .ConfigureAwait(false);
 
         foreach (var asset in expiredAssets)
         {
-            if (_runtimeOptions.PhysicallyDeleteExpiredAssets)
-            {
-                await DeletePhysicallyAsync(asset, rethrowOnFailure: false, cancellationToken).ConfigureAwait(false);
-            }
-            else
-            {
-                asset.MarkDeleted(effectiveUtcNow, physicallyDeleted: false);
-                await _objectStorageAssetDbContext.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
-            }
+            await _lifecycleManager.DeleteAssetAsync(
+                    asset,
+                    _runtimeOptions.PhysicallyDeleteExpiredAssets,
+                    rethrowOnFailure: false,
+                    cancellationToken)
+                .ConfigureAwait(false);
         }
 
         return expiredAssets.Count;
@@ -53,7 +54,12 @@ internal sealed class ObjectAssetMaintenanceService(
 
         foreach (var asset in assets)
         {
-            await DeletePhysicallyAsync(asset, rethrowOnFailure: false, cancellationToken).ConfigureAwait(false);
+            await _lifecycleManager.DeleteAssetAsync(
+                    asset,
+                    physicallyDelete: true,
+                    rethrowOnFailure: false,
+                    cancellationToken)
+                .ConfigureAwait(false);
         }
 
         return assets.Count;
@@ -68,7 +74,12 @@ internal sealed class ObjectAssetMaintenanceService(
 
         foreach (var asset in assets)
         {
-            await DeletePhysicallyAsync(asset, rethrowOnFailure: false, cancellationToken).ConfigureAwait(false);
+            await _lifecycleManager.DeleteAssetAsync(
+                    asset,
+                    physicallyDelete: true,
+                    rethrowOnFailure: false,
+                    cancellationToken)
+                .ConfigureAwait(false);
         }
 
         return assets.Count;
@@ -76,6 +87,7 @@ internal sealed class ObjectAssetMaintenanceService(
 
     public async Task<ObjectAssetReconciliationReport> ReconcileAsync(CancellationToken cancellationToken = default)
     {
+        var utcNow = DateTimeOffset.UtcNow;
         var uploadFailedAssetIds = await _objectStorageAssetDbContext.ObjectAssets
             .AsNoTracking()
             .Where(x => x.Status == ObjectAssetStatus.UploadFailed)
@@ -93,6 +105,33 @@ internal sealed class ObjectAssetMaintenanceService(
         var pendingDeleteCount = await _objectStorageAssetDbContext.ObjectAssets
             .AsNoTracking()
             .CountAsync(x => x.Status == ObjectAssetStatus.PendingDelete, cancellationToken)
+            .ConfigureAwait(false);
+
+        var expiredTemporaryAssetIds = await _objectStorageAssetDbContext.ObjectAssets
+            .AsNoTracking()
+            .Where(x => x.Status == ObjectAssetStatus.Active
+                        && x.TemporaryBindingId.HasValue
+                        && x.TemporaryBindingExpiresAtUtc.HasValue
+                        && x.TemporaryBindingExpiresAtUtc <= utcNow)
+            .Select(x => x.Id)
+            .ToArrayAsync(cancellationToken)
+            .ConfigureAwait(false);
+
+        var unboundAssetIds = await _objectStorageAssetDbContext.ObjectAssets
+            .AsNoTracking()
+            .Where(x => x.Status == ObjectAssetStatus.Active
+                        && x.OwnerKeyKind == ObjectAssetOwnerKeyKind.Unassigned
+                        && !x.TemporaryBindingId.HasValue)
+            .Select(x => x.Id)
+            .ToArrayAsync(cancellationToken)
+            .ConfigureAwait(false);
+
+        var referencedOnlyAssetIds = await _objectStorageAssetDbContext.ObjectAssets
+            .AsNoTracking()
+            .Where(x => x.Status == ObjectAssetStatus.Active
+                        && x.OwnershipMode == ObjectAssetOwnershipMode.Referenced)
+            .Select(x => x.Id)
+            .ToArrayAsync(cancellationToken)
             .ConfigureAwait(false);
 
         var activeAssets = await _objectStorageAssetDbContext.ObjectAssets
@@ -130,47 +169,12 @@ internal sealed class ObjectAssetMaintenanceService(
             MissingActiveAssetIds = missingActiveAssetIds,
             UploadFailedAssetIds = uploadFailedAssetIds,
             DeleteFailedAssetIds = deleteFailedAssetIds,
+            ExpiredTemporaryAssetIds = expiredTemporaryAssetIds,
+            UnboundAssetIds = unboundAssetIds,
+            ReferencedOnlyAssetIds = referencedOnlyAssetIds,
             PendingDeleteCount = pendingDeleteCount,
             ActiveCount = activeAssets.Length
         };
-    }
-
-    private async Task DeletePhysicallyAsync(
-        ObjectAsset asset,
-        bool rethrowOnFailure,
-        CancellationToken cancellationToken)
-    {
-        if (asset.Status != ObjectAssetStatus.PendingDelete)
-        {
-            asset.MarkPendingDelete(DateTimeOffset.UtcNow);
-            await _objectStorageAssetDbContext.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
-        }
-
-        try
-        {
-            await _objectStorageProvider.DeleteObjectAsync(
-                    new ObjectStorageDeleteRequest
-                    {
-                        BucketName = asset.BucketName,
-                        ObjectKey = asset.ObjectKey,
-                        VersionId = asset.ProviderVersionId
-                    },
-                    cancellationToken)
-                .ConfigureAwait(false);
-
-            asset.MarkDeleted(DateTimeOffset.UtcNow, physicallyDeleted: true);
-            await _objectStorageAssetDbContext.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
-        }
-        catch (Exception ex)
-        {
-            asset.MarkDeleteFailed(DateTimeOffset.UtcNow, ex.Message);
-            await _objectStorageAssetDbContext.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
-
-            if (rethrowOnFailure)
-            {
-                throw;
-            }
-        }
     }
 
     private sealed record ActiveAssetProjection(

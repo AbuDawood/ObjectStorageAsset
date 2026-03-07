@@ -34,10 +34,14 @@ public static class DependencyInjection
         services.AddSingleton(schema);
         services.AddSingleton<IObjectKeyStrategy, DefaultObjectKeyStrategy>();
         services.AddScoped<ObjectAssetCommandBuffer>();
+        services.AddScoped<ObjectAssetLifecycleManager>();
         services.AddScoped<IObjectAssetSessionFactory, ObjectAssetSessionFactory>();
+        services.AddScoped<IObjectAssetTemporarySessionFactory, ObjectAssetTemporarySessionFactory>();
         services.AddScoped<IObjectAssetCoordinator, ObjectAssetCoordinator>();
+        services.AddScoped<IObjectAssetBindingFinalizer, ObjectAssetBindingFinalizer>();
         services.AddScoped<IObjectAssetReader, ObjectAssetReader>();
         services.AddScoped<IObjectAssetContentReader, ObjectAssetContentReader>();
+        services.AddScoped<IObjectAssetRegistry, ObjectAssetRegistry>();
         services.AddScoped<IObjectAssetMaintenanceService, ObjectAssetMaintenanceService>();
         services.AddDbContext<ObjectStorageAssetDbContext>((provider, builder) =>
         {

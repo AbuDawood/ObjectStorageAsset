@@ -3,6 +3,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Elf.ObjectStorageAsset;
 using Elf.ObjectStorageAsset.Application;
 using Elf.ObjectStorageAsset.Minio;
+using Elf.ObjectStorageAsset.TestSupport.TestDoubles;
 
 namespace Elf.ObjectStorageAsset.UnitTests;
 
@@ -21,14 +22,22 @@ public sealed class ScaffoldSmokeTests
             options.DefaultStorageNamespace = "unit-tests";
             options.AddBinding<OrderAssets>();
         });
+        services.AddSingleton<IObjectStorageProvider>(_ => new InMemoryMinioLikeObjectStorageProvider());
+        services.AddSingleton<IObjectStorageBucketResolver>(new FixedBucketResolver("osa-dev"));
 
         using var provider = services.BuildServiceProvider();
         var options = provider.GetRequiredService<Elf.ObjectStorageAsset.ObjectStorageAssetOptions>();
         var catalog = provider.GetRequiredService<IObjectAssetBindingCatalog>();
+        var registry = provider.GetRequiredService<IObjectAssetRegistry>();
+        var tempSessionFactory = provider.GetRequiredService<IObjectAssetTemporarySessionFactory>();
+        var bindingFinalizer = provider.GetRequiredService<IObjectAssetBindingFinalizer>();
 
         options.Schema.Should().Be("osa");
         catalog.GetOwner<Order>().OwnerType.Should().Be("order");
         catalog.GetOwner<Order>().Slots.Select(x => x.Name).Should().Equal("invoice", "attachments");
+        registry.Should().NotBeNull();
+        tempSessionFactory.Should().NotBeNull();
+        bindingFinalizer.Should().NotBeNull();
     }
 
     [Test]

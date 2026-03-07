@@ -65,8 +65,15 @@ internal sealed class ObjectAssetConfiguration : IEntityTypeConfiguration<Object
         builder.Property(x => x.ProviderVersionId)
             .HasMaxLength(128);
 
+        builder.Property(x => x.OwnershipMode)
+            .IsRequired();
+
         builder.Property(x => x.Status)
             .IsRequired();
+
+        builder.Property(x => x.TemporaryBindingId);
+
+        builder.Property(x => x.TemporaryBindingExpiresAtUtc);
 
         builder.Property(x => x.ErrorMessage)
             .HasMaxLength(1024);
@@ -99,12 +106,31 @@ internal sealed class ObjectAssetConfiguration : IEntityTypeConfiguration<Object
 
         builder.HasIndex(x => new
         {
+            x.Status,
+            x.TemporaryBindingExpiresAtUtc
+        });
+
+        builder.HasIndex(x => new
+        {
+            x.Status,
+            x.OwnershipMode
+        });
+
+        builder.HasIndex(x => new
+        {
+            x.TemporaryBindingId,
+            x.Status
+        });
+
+        builder.HasIndex(x => new
+        {
             x.OwnerType,
             x.OwnerKeyKind,
             x.OwnerKeyInt64,
             x.OwnerKeyGuid,
             x.OwnerKeyText,
-            x.SlotName
+            x.SlotName,
+            x.TemporaryBindingId
         })
             .IsUnique()
             .HasFilter(BuildSingleSlotFilter());

@@ -36,7 +36,7 @@ internal sealed class ObjectAssetReader(
             .FirstOrDefaultAsync(cancellationToken)
             .ConfigureAwait(false);
 
-        return asset is null ? null : MapReference(asset);
+        return asset is null ? null : ObjectAssetReferenceMapper.Map(asset);
     }
 
     public async Task<IReadOnlyList<ObjectAssetReferenceDto>> GetManyAsync<T>(
@@ -61,7 +61,7 @@ internal sealed class ObjectAssetReader(
             .ToListAsync(cancellationToken)
             .ConfigureAwait(false);
 
-        return assets.Select(MapReference).ToArray();
+        return assets.Select(ObjectAssetReferenceMapper.Map).ToArray();
     }
 
     public async Task<IReadOnlyDictionary<TKey, ObjectAssetReferenceDto>> GetSinglesAsync<T, TKey>(
@@ -151,7 +151,7 @@ internal sealed class ObjectAssetReader(
         return assets
             .Select(asset => new OwnerReferenceRow<TKey>(
                 normalizedKeys.OwnerKeyMap[CreateOwnerKeyToken(asset)],
-                MapReference(asset),
+                ObjectAssetReferenceMapper.Map(asset),
                 asset.CreatedAtUtc))
             .ToArray();
     }
@@ -270,21 +270,6 @@ internal sealed class ObjectAssetReader(
             ObjectAssetOwnerKeyKind.String when asset.OwnerKeyText is not null => $"s:{asset.OwnerKeyText}",
             _ => throw new InvalidOperationException(
                 $"Object asset '{asset.Id}' has an invalid owner key state.")
-        };
-    }
-
-    private static ObjectAssetReferenceDto MapReference(ObjectAsset asset)
-    {
-        return new ObjectAssetReferenceDto
-        {
-            AssetId = asset.Id,
-            SlotName = asset.SlotName,
-            FileName = asset.OriginalFileName,
-            ContentType = asset.ContentType,
-            SizeBytes = asset.SizeBytes,
-            Status = asset.Status,
-            CreatedAtUtc = asset.CreatedAtUtc,
-            ExpiresAtUtc = asset.ExpiresAtUtc
         };
     }
 

@@ -5,6 +5,7 @@ namespace Elf.ObjectStorageAsset.Domain.Enums;
 /// </summary>
 public enum ObjectAssetOwnerKeyKind
 {
+    Unassigned = 0,
     Int64 = 1,
     Guid = 2,
     String = 3

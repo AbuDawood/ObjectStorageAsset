@@ -47,7 +47,13 @@ public sealed class ObjectAsset
 
     public string? ProviderVersionId { get; private set; }
 
+    public ObjectAssetOwnershipMode OwnershipMode { get; private set; }
+
     public ObjectAssetStatus Status { get; private set; }
+
+    public Guid? TemporaryBindingId { get; private set; }
+
+    public DateTimeOffset? TemporaryBindingExpiresAtUtc { get; private set; }
 
     public DateTimeOffset? ExpiresAtUtc { get; private set; }
 
@@ -77,7 +83,8 @@ public sealed class ObjectAsset
         DateTimeOffset createdAtUtc,
         long sizeBytes = 0,
         string? sha256 = null,
-        DateTimeOffset? expiresAtUtc = null)
+        DateTimeOffset? expiresAtUtc = null,
+        ObjectAssetOwnershipMode ownershipMode = ObjectAssetOwnershipMode.Managed)
     {
         if (id == Guid.Empty)
         {
@@ -130,9 +137,68 @@ public sealed class ObjectAsset
                 : contentType.Trim(),
             SizeBytes = sizeBytes,
             Sha256 = string.IsNullOrWhiteSpace(sha256) ? string.Empty : sha256.Trim(),
+            OwnershipMode = ownershipMode,
             Status = ObjectAssetStatus.PendingUpload,
             ExpiresAtUtc = expiresAtUtc,
             CreatedAtUtc = createdAtUtc,
+            LastStatusChangedAtUtc = createdAtUtc
+        };
+    }
+
+    public static ObjectAsset CreateRegisteredDescriptor(
+        Guid id,
+        string bucketName,
+        string objectKey,
+        string originalFileName,
+        string contentType,
+        long sizeBytes,
+        string? sha256,
+        DateTimeOffset createdAtUtc,
+        DateTimeOffset? expiresAtUtc,
+        ObjectAssetOwnershipMode ownershipMode)
+    {
+        if (id == Guid.Empty)
+        {
+            throw new InvalidOperationException("Object asset id is required.");
+        }
+
+        if (string.IsNullOrWhiteSpace(bucketName))
+        {
+            throw new InvalidOperationException("BucketName is required.");
+        }
+
+        if (string.IsNullOrWhiteSpace(objectKey))
+        {
+            throw new InvalidOperationException("ObjectKey is required.");
+        }
+
+        if (string.IsNullOrWhiteSpace(originalFileName))
+        {
+            throw new InvalidOperationException("OriginalFileName is required.");
+        }
+
+        return new ObjectAsset
+        {
+            Id = id,
+            OwnerType = string.Empty,
+            OwnerKeyKind = ObjectAssetOwnerKeyKind.Unassigned,
+            SlotName = string.Empty,
+            SlotMultiplicity = ObjectAssetSlotMultiplicity.Many,
+            BucketName = bucketName.Trim(),
+            StorageNamespace = string.Empty,
+            ObjectKey = objectKey.Trim(),
+            OriginalFileName = originalFileName.Trim(),
+            Extension = Path.GetExtension(originalFileName)?.Trim() ?? string.Empty,
+            ContentType = string.IsNullOrWhiteSpace(contentType)
+                ? "application/octet-stream"
+                : contentType.Trim(),
+            SizeBytes = sizeBytes,
+            Sha256 = string.IsNullOrWhiteSpace(sha256) ? string.Empty : sha256.Trim(),
+            OwnershipMode = ownershipMode,
+            Status = ObjectAssetStatus.Active,
+            ExpiresAtUtc = expiresAtUtc,
+            CreatedAtUtc = createdAtUtc,
+            UploadedAtUtc = createdAtUtc,
             LastStatusChangedAtUtc = createdAtUtc
         };
     }
@@ -143,6 +209,7 @@ public sealed class ObjectAsset
         OwnerKeyInt64 = ownerKey;
         OwnerKeyGuid = null;
         OwnerKeyText = null;
+        ClearTemporaryBinding();
     }
 
     public void BindOwner(Guid ownerKey)
@@ -156,6 +223,7 @@ public sealed class ObjectAsset
         OwnerKeyInt64 = null;
         OwnerKeyGuid = ownerKey;
         OwnerKeyText = null;
+        ClearTemporaryBinding();
     }
 
     public void BindOwner(string ownerKey)
@@ -169,6 +237,69 @@ public sealed class ObjectAsset
         OwnerKeyInt64 = null;
         OwnerKeyGuid = null;
         OwnerKeyText = ownerKey.Trim();
+        ClearTemporaryBinding();
+    }
+
+    public void BindTemporary(
+        string ownerType,
+        string slotName,
+        ObjectAssetSlotMultiplicity slotMultiplicity,
+        Guid temporaryBindingId,
+        DateTimeOffset? temporaryBindingExpiresAtUtc)
+    {
+        if (string.IsNullOrWhiteSpace(ownerType))
+        {
+            throw new InvalidOperationException("OwnerType is required.");
+        }
+
+        if (string.IsNullOrWhiteSpace(slotName))
+        {
+            throw new InvalidOperationException("SlotName is required.");
+        }
+
+        if (temporaryBindingId == Guid.Empty)
+        {
+            throw new InvalidOperationException("Temporary binding id is required.");
+        }
+
+        OwnerType = ownerType.Trim();
+        SlotName = slotName.Trim();
+        SlotMultiplicity = slotMultiplicity;
+        OwnerKeyKind = ObjectAssetOwnerKeyKind.Unassigned;
+        OwnerKeyInt64 = null;
+        OwnerKeyGuid = null;
+        OwnerKeyText = null;
+        TemporaryBindingId = temporaryBindingId;
+        TemporaryBindingExpiresAtUtc = temporaryBindingExpiresAtUtc;
+    }
+
+    public void SetOwnerSlot(
+        string ownerType,
+        string slotName,
+        ObjectAssetSlotMultiplicity slotMultiplicity)
+    {
+        if (string.IsNullOrWhiteSpace(ownerType))
+        {
+            throw new InvalidOperationException("OwnerType is required.");
+        }
+
+        if (string.IsNullOrWhiteSpace(slotName))
+        {
+            throw new InvalidOperationException("SlotName is required.");
+        }
+
+        OwnerType = ownerType.Trim();
+        SlotName = slotName.Trim();
+        SlotMultiplicity = slotMultiplicity;
+    }
+
+    public void ClearOwnerBinding()
+    {
+        OwnerKeyKind = ObjectAssetOwnerKeyKind.Unassigned;
+        OwnerKeyInt64 = null;
+        OwnerKeyGuid = null;
+        OwnerKeyText = null;
+        ClearTemporaryBinding();
     }
 
     public void MarkUploadSucceeded(
@@ -222,9 +353,31 @@ public sealed class ObjectAsset
 
     public bool IsReadable() => Status == ObjectAssetStatus.Active;
 
+    public bool IsOwnerBound()
+    {
+        return OwnerKeyKind != ObjectAssetOwnerKeyKind.Unassigned;
+    }
+
+    public bool IsTemporarilyBound()
+    {
+        return TemporaryBindingId.HasValue;
+    }
+
+    public bool IsUnbound()
+    {
+        return !IsOwnerBound() && !IsTemporarilyBound();
+    }
+
     public bool HasExpired(DateTimeOffset utcNow)
     {
         return ExpiresAtUtc.HasValue && ExpiresAtUtc.Value <= utcNow;
+    }
+
+    public bool HasExpiredTemporaryBinding(DateTimeOffset utcNow)
+    {
+        return TemporaryBindingId.HasValue
+               && TemporaryBindingExpiresAtUtc.HasValue
+               && TemporaryBindingExpiresAtUtc.Value <= utcNow;
     }
 
     private static string? NormalizeErrorMessage(string? errorMessage)
@@ -232,5 +385,11 @@ public sealed class ObjectAsset
         return string.IsNullOrWhiteSpace(errorMessage)
             ? null
             : errorMessage.Trim();
+    }
+
+    private void ClearTemporaryBinding()
+    {
+        TemporaryBindingId = null;
+        TemporaryBindingExpiresAtUtc = null;
     }
 }

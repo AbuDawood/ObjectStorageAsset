@@ -10,6 +10,8 @@ Current implementation state:
 - Provider abstractions include `IObjectStorageProvider`, `IObjectKeyStrategy`, and reserved OSA metadata stamps
 - Default MinIO support is available through `Elf.ObjectStorageAsset.Minio`
 - Command-side orchestration is available through `IObjectAssetSessionFactory` and `IObjectAssetCoordinator`
+- Descriptor registry APIs are available through `IObjectAssetRegistry`
+- Temporary upload/finalization APIs are available through `IObjectAssetTemporarySessionFactory` and `IObjectAssetBindingFinalizer`
 - Read-side services are available through `IObjectAssetReader`, `IObjectAssetContentReader`, and the SQL query bridge
 - Lifecycle operations are available through `IObjectAssetMaintenanceService` with optional hosted maintenance and auto-migration services
 - Automated workflow tests use a reusable in-memory MinIO-like provider together with SQL Server-backed metadata persistence
@@ -113,6 +115,8 @@ Current persistence shape:
 - configurable schema
 - schema-aware `__EFMigrationsHistory`
 - owner binding columns on `ObjectAssets`
+- stable `AssetId` as the immutable primary identifier for every asset row
+- optional temporary binding fields and ownership mode on `ObjectAssets`
 - computed enum label columns such as `StatusLabel`
 
 The first migration is generated from `ObjectStorageAssetDbContext`.
@@ -183,6 +187,27 @@ Current command-side behavior:
 - single-slot replacement deletes the previous asset before inserting the new one
 - intentional delete follows the configured logical/physical delete mode
 
+Temporary uploads can be stored before the real owner key exists:
+
+```csharp
+var temporaryBindingId = Guid.NewGuid();
+var temporaryAssets = tempSessionFactory.For<Order>(temporaryBindingId, DateTimeOffset.UtcNow.AddMinutes(30));
+var invoice = await temporaryAssets.SetSingleAsync(
+    OrderAssets.Invoice,
+    fileStream,
+    "draft-invoice.pdf",
+    "application/pdf",
+    cancellationToken: cancellationToken);
+
+await hostDbContext.SaveChangesAsync(cancellationToken);
+await bindingFinalizer.FinalizeTemporaryBindingAsync(temporaryBindingId, order, cancellationToken);
+```
+
+Current temporary-binding behavior:
+- uploads are persisted immediately and receive a stable `AssetId` up front
+- temporary bindings expire independently from asset content expiry
+- finalization preserves the same `AssetId` and only moves the binding onto the concrete owner
+
 ## Read Workflow
 
 Metadata reads stay separate from file content reads:
@@ -205,6 +230,30 @@ Recommended frontend payload shape:
 - entity fields from the host query
 - file reference metadata from OSA
 - host-generated download URLs
+
+Descriptor reads and portable exports use `IObjectAssetRegistry`:
+
+```csharp
+var descriptor = await assetRegistry.GetDescriptorAsync(assetId, cancellationToken);
+var descriptors = await assetRegistry.GetDescriptorsAsync(assetIds, cancellationToken);
+```
+
+Descriptor registration supports:
+- add if missing
+- ignore if identical
+- reject when the same `AssetId` conflicts on descriptor metadata or ownership mode
+
+Descriptor payload shape:
+- `AssetId`
+- `FileName`
+- `ContentType`
+- `Length`
+- `Hash`
+- `Bucket`
+- `ObjectKey`
+- `CreatedAtUtc`
+- `ExpiresAtUtc`
+- `DescriptorVersion`
 
 ## Automated Test Infrastructure
 
@@ -291,6 +340,11 @@ Lifecycle maintenance is exposed through `IObjectAssetMaintenanceService`:
 - `ProcessPendingDeletesAsync`
 - `RetryDeleteFailuresAsync`
 - `ReconcileAsync`
+
+Reconciliation now also surfaces:
+- expired temporary assets
+- unbound/orphan assets
+- referenced-only assets
 
 When `EnableMaintenanceWorker` is enabled:
 - expired assets are processed on the configured interval
