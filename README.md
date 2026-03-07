@@ -54,8 +54,12 @@ The GitHub Actions workflow at `.github/workflows/nuget.yml` restores, builds, a
 
 Publishing flow:
 - create a `NUGET_API_KEY` repository secret
-- push a version tag such as `v0.1.0`
+- push a version tag such as `v0.1.1`
 - the workflow publishes the generated `.nupkg` and `.snupkg` files to NuGet.org
+
+## License
+
+This repository is licensed under the MIT License. See `LICENSE`.
 
 ## Development Loop
 

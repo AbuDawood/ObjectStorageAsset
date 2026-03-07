@@ -38,10 +38,17 @@ jobs:
         id: version
         shell: bash
         run: |
+          VERSION_PREFIX="$(sed -n 's:.*<VersionPrefix>\(.*\)</VersionPrefix>.*:\1:p' Directory.Build.props | head -n 1)"
+
+          if [[ -z "${VERSION_PREFIX}" ]]; then
+            echo "VersionPrefix was not found in Directory.Build.props."
+            exit 1
+          fi
+
           if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
             VERSION="${GITHUB_REF_NAME#v}"
           else
-            VERSION="0.1.0-ci.${GITHUB_RUN_NUMBER}"
+            VERSION="${VERSION_PREFIX}-ci.${GITHUB_RUN_NUMBER}"
           fi
 
           echo "package_version=$VERSION" >> "$GITHUB_OUTPUT"
