@@ -20,6 +20,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <PackageId>Elf.ObjectStorageAsset</PackageId>
+    <Description>Core registration, query bridge, and hosted-service integration for Elf.ObjectStorageAsset.</Description>
     <AssemblyName>Elf.ObjectStorageAsset</AssemblyName>
     <RootNamespace>Elf.ObjectStorageAsset</RootNamespace>
   </PropertyGroup>

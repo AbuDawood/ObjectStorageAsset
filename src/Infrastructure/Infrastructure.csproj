@@ -26,6 +26,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <PackageId>Elf.ObjectStorageAsset.Infrastructure</PackageId>
+    <Description>EF Core persistence and runtime infrastructure for Elf.ObjectStorageAsset.</Description>
     <AssemblyName>Elf.ObjectStorageAsset.Infrastructure</AssemblyName>
     <RootNamespace>Elf.ObjectStorageAsset.Infrastructure</RootNamespace>
   </PropertyGroup>

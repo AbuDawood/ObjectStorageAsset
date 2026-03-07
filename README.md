@@ -40,6 +40,23 @@ test/
   UnitTests/
 ```
 
+## NuGet Packaging
+
+NuGet packages are produced only from the projects under `src/`:
+- `Elf.ObjectStorageAsset`
+- `Elf.ObjectStorageAsset.Minio`
+- `Elf.ObjectStorageAsset.Application`
+- `Elf.ObjectStorageAsset.Domain`
+- `Elf.ObjectStorageAsset.Infrastructure`
+- `Elf.ObjectStorageAsset.Helpers`
+
+The GitHub Actions workflow at `.github/workflows/nuget.yml` restores, builds, and packs `ObjectStorageAsset.Pack.slnf`, which includes only those source projects. The repository `README.md` is embedded into every generated package.
+
+Publishing flow:
+- create a `NUGET_API_KEY` repository secret
+- push a version tag such as `v0.1.0`
+- the workflow publishes the generated `.nupkg` and `.snupkg` files to NuGet.org
+
 ## Development Loop
 
 Each slice follows the same loop:

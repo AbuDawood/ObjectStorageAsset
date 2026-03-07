@@ -5,6 +5,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <PackageId>Elf.ObjectStorageAsset.Helpers</PackageId>
+    <Description>Shared helper types for the Elf.ObjectStorageAsset package set.</Description>
     <AssemblyName>Elf.ObjectStorageAsset.Helpers</AssemblyName>
     <RootNamespace>Elf.ObjectStorageAsset.Helpers</RootNamespace>
   </PropertyGroup>

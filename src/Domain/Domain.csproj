@@ -13,6 +13,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <PackageId>Elf.ObjectStorageAsset.Domain</PackageId>
+    <Description>Domain model types for Elf.ObjectStorageAsset.</Description>
     <AssemblyName>Elf.ObjectStorageAsset.Domain</AssemblyName>
     <RootNamespace>Elf.ObjectStorageAsset.Domain</RootNamespace>
   </PropertyGroup>

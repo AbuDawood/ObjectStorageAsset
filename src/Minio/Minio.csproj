@@ -14,6 +14,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <PackageId>Elf.ObjectStorageAsset.Minio</PackageId>
+    <Description>MinIO storage provider for Elf.ObjectStorageAsset.</Description>
     <AssemblyName>Elf.ObjectStorageAsset.Minio</AssemblyName>
     <RootNamespace>Elf.ObjectStorageAsset.Minio</RootNamespace>
   </PropertyGroup>

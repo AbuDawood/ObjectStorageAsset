@@ -15,6 +15,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <PackageId>Elf.ObjectStorageAsset.Application</PackageId>
+    <Description>Abstractions and application contracts for Elf.ObjectStorageAsset.</Description>
     <AssemblyName>Elf.ObjectStorageAsset.Application</AssemblyName>
     <RootNamespace>Elf.ObjectStorageAsset.Application</RootNamespace>
   </PropertyGroup>

@@ -1,0 +1,13 @@
+{
+  "solution": {
+    "path": "ObjectStorageAsset.sln",
+    "projects": [
+      "src\\Helpers\\Helpers.csproj",
+      "src\\Domain\\Domain.csproj",
+      "src\\Application\\Application.csproj",
+      "src\\Infrastructure\\Infrastructure.csproj",
+      "src\\Bootstrap\\Bootstrap.csproj",
+      "src\\Minio\\Minio.csproj"
+    ]
+  }
+}

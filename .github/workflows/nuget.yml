@@ -1,0 +1,78 @@
+name: NuGet
+
+on:
+  pull_request:
+    branches:
+      - main
+  push:
+    branches:
+      - main
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  DOTNET_VERSION: 8.0.x
+  CONFIGURATION: Release
+  PACK_SOLUTION: ObjectStorageAsset.Pack.slnf
+
+jobs:
+  pack:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+
+      - name: Compute package version
+        id: version
+        shell: bash
+        run: |
+          if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
+            VERSION="${GITHUB_REF_NAME#v}"
+          else
+            VERSION="0.1.0-ci.${GITHUB_RUN_NUMBER}"
+          fi
+
+          echo "package_version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Restore
+        run: dotnet restore ${{ env.PACK_SOLUTION }}
+
+      - name: Build
+        run: dotnet build ${{ env.PACK_SOLUTION }} --configuration ${{ env.CONFIGURATION }} --no-restore -m:1 /p:ContinuousIntegrationBuild=true
+
+      - name: Pack
+        run: dotnet pack ${{ env.PACK_SOLUTION }} --configuration ${{ env.CONFIGURATION }} --no-build --output ./artifacts/nuget -m:1 /p:ContinuousIntegrationBuild=true /p:Version=${{ steps.version.outputs.package_version }}
+
+      - name: Upload packages
+        uses: actions/upload-artifact@v4
+        with:
+          name: nuget-${{ steps.version.outputs.package_version }}
+          path: |
+            artifacts/nuget/*.nupkg
+            artifacts/nuget/*.snupkg
+
+      - name: Publish to NuGet.org
+        if: github.event_name == 'push' && github.ref_type == 'tag'
+        env:
+          NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
+        shell: bash
+        run: |
+          if [[ -z "${NUGET_API_KEY}" ]]; then
+            echo "NUGET_API_KEY is not set."
+            exit 1
+          fi
+
+          dotnet nuget push "artifacts/nuget/*.nupkg" --api-key "${NUGET_API_KEY}" --source "https://api.nuget.org/v3/index.json" --skip-duplicate
+          dotnet nuget push "artifacts/nuget/*.snupkg" --api-key "${NUGET_API_KEY}" --source "https://api.nuget.org/v3/index.json" --skip-duplicate
