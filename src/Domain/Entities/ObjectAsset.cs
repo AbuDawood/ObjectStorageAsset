@@ -49,6 +49,8 @@ public sealed class ObjectAsset
 
     public ObjectAssetOwnershipMode OwnershipMode { get; private set; }
 
+    public string CustomMetadataJson { get; private set; } = "{}";
+
     public ObjectAssetStatus Status { get; private set; }
 
     public Guid? TemporaryBindingId { get; private set; }
@@ -86,7 +88,8 @@ public sealed class ObjectAsset
         long sizeBytes = 0,
         string? sha256 = null,
         DateTimeOffset? expiresAtUtc = null,
-        ObjectAssetOwnershipMode ownershipMode = ObjectAssetOwnershipMode.Managed)
+        ObjectAssetOwnershipMode ownershipMode = ObjectAssetOwnershipMode.Managed,
+        string? customMetadataJson = null)
     {
         if (id == Guid.Empty)
         {
@@ -140,6 +143,7 @@ public sealed class ObjectAsset
             SizeBytes = sizeBytes,
             Sha256 = string.IsNullOrWhiteSpace(sha256) ? string.Empty : sha256.Trim(),
             OwnershipMode = ownershipMode,
+            CustomMetadataJson = NormalizeCustomMetadataJson(customMetadataJson),
             Status = ObjectAssetStatus.PendingUpload,
             ExpiresAtUtc = expiresAtUtc,
             CreatedAtUtc = createdAtUtc,
@@ -157,7 +161,8 @@ public sealed class ObjectAsset
         string? sha256,
         DateTimeOffset createdAtUtc,
         DateTimeOffset? expiresAtUtc,
-        ObjectAssetOwnershipMode ownershipMode)
+        ObjectAssetOwnershipMode ownershipMode,
+        string? customMetadataJson = null)
     {
         if (id == Guid.Empty)
         {
@@ -197,6 +202,7 @@ public sealed class ObjectAsset
             SizeBytes = sizeBytes,
             Sha256 = string.IsNullOrWhiteSpace(sha256) ? string.Empty : sha256.Trim(),
             OwnershipMode = ownershipMode,
+            CustomMetadataJson = NormalizeCustomMetadataJson(customMetadataJson),
             Status = ObjectAssetStatus.Active,
             ExpiresAtUtc = expiresAtUtc,
             CreatedAtUtc = createdAtUtc,
@@ -387,6 +393,13 @@ public sealed class ObjectAsset
         return string.IsNullOrWhiteSpace(errorMessage)
             ? null
             : errorMessage.Trim();
+    }
+
+    private static string NormalizeCustomMetadataJson(string? customMetadataJson)
+    {
+        return string.IsNullOrWhiteSpace(customMetadataJson)
+            ? "{}"
+            : customMetadataJson.Trim();
     }
 
     private void ClearTemporaryBinding()

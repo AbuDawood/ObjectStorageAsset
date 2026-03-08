@@ -106,7 +106,8 @@ internal sealed class ObjectAssetRegistry(ObjectStorageAssetDbContext objectStor
                 request.Descriptor.Hash,
                 request.Descriptor.CreatedAtUtc,
                 request.Descriptor.ExpiresAtUtc,
-                request.OwnershipMode);
+                request.OwnershipMode,
+                ObjectAssetMetadataBagSerializer.Serialize(request.Descriptor.Metadata));
 
             _objectStorageAssetDbContext.ObjectAssets.Add(asset);
             await _objectStorageAssetDbContext.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
@@ -197,6 +198,11 @@ internal sealed class ObjectAssetRegistry(ObjectStorageAssetDbContext objectStor
             conflicts.Add(nameof(ObjectAssetDescriptor.ExpiresAtUtc));
         }
 
+        if (!AreMetadataEqual(existingDescriptor.Metadata, descriptor.Metadata))
+        {
+            conflicts.Add(nameof(ObjectAssetDescriptor.Metadata));
+        }
+
         if (existingAsset.OwnershipMode != request.OwnershipMode)
         {
             conflicts.Add(nameof(ObjectAssetDescriptorRegistrationRequest.OwnershipMode));
@@ -218,6 +224,7 @@ internal sealed class ObjectAssetRegistry(ObjectStorageAssetDbContext objectStor
             ObjectKey = asset.ObjectKey,
             CreatedAtUtc = asset.CreatedAtUtc,
             ExpiresAtUtc = asset.ExpiresAtUtc,
+            Metadata = ObjectAssetMetadataBagSerializer.Deserialize(asset.CustomMetadataJson),
             DescriptorVersion = ObjectAssetDescriptor.CurrentVersion
         };
     }
@@ -231,7 +238,8 @@ internal sealed class ObjectAssetRegistry(ObjectStorageAssetDbContext objectStor
             throw new InvalidOperationException("Asset descriptor registration requires a non-empty asset id.");
         }
 
-        if (descriptor.DescriptorVersion != ObjectAssetDescriptor.CurrentVersion)
+        if (descriptor.DescriptorVersion < 1
+            || descriptor.DescriptorVersion > ObjectAssetDescriptor.CurrentVersion)
         {
             throw new InvalidOperationException(
                 $"Descriptor version '{descriptor.DescriptorVersion}' is not supported.");
@@ -261,6 +269,8 @@ internal sealed class ObjectAssetRegistry(ObjectStorageAssetDbContext objectStor
         {
             throw new InvalidOperationException("Descriptor ObjectKey is required.");
         }
+
+        ObjectAssetMetadataBagSerializer.Normalize(descriptor.Metadata);
     }
 
     private static string NormalizeString(string? value)
@@ -268,5 +278,29 @@ internal sealed class ObjectAssetRegistry(ObjectStorageAssetDbContext objectStor
         return string.IsNullOrWhiteSpace(value)
             ? string.Empty
             : value.Trim();
+    }
+
+    private static bool AreMetadataEqual(
+        IReadOnlyDictionary<string, string> left,
+        IReadOnlyDictionary<string, string> right)
+    {
+        var normalizedLeft = ObjectAssetMetadataBagSerializer.Normalize(left);
+        var normalizedRight = ObjectAssetMetadataBagSerializer.Normalize(right);
+
+        if (normalizedLeft.Count != normalizedRight.Count)
+        {
+            return false;
+        }
+
+        foreach (var pair in normalizedLeft)
+        {
+            if (!normalizedRight.TryGetValue(pair.Key, out var rightValue)
+                || !string.Equals(pair.Value, rightValue, StringComparison.Ordinal))
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
 }

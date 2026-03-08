@@ -235,7 +235,8 @@ internal sealed class ObjectAssetLifecycleManager(
             content.SizeBytes,
             content.Sha256,
             content.ExpiresAtUtc,
-            ObjectAssetOwnershipMode.Managed);
+            ObjectAssetOwnershipMode.Managed,
+            content.MetadataJson);
     }
 
     private async Task PersistAndUploadAsync(

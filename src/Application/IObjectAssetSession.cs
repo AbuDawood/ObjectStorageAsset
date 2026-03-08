@@ -11,6 +11,7 @@ public interface IObjectAssetSession<T>
         string fileName,
         string? contentType,
         DateTimeOffset? expiresAtUtc = null,
+        IReadOnlyDictionary<string, string>? metadata = null,
         CancellationToken cancellationToken = default);
 
     Task AddAsync(
@@ -19,6 +20,7 @@ public interface IObjectAssetSession<T>
         string fileName,
         string? contentType,
         DateTimeOffset? expiresAtUtc = null,
+        IReadOnlyDictionary<string, string>? metadata = null,
         CancellationToken cancellationToken = default);
 
     Task RemoveAsync(Guid assetId, CancellationToken cancellationToken = default);

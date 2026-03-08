@@ -4,6 +4,7 @@ using Elf.ObjectStorageAsset.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Metadata;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 
 #nullable disable
@@ -11,9 +12,11 @@ using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 namespace Elf.ObjectStorageAsset.Infrastructure.Persistence.Migrations
 {
     [DbContext(typeof(ObjectStorageAssetDbContext))]
-    partial class ObjectStorageAssetDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260308065818_AddObjectAssetCustomMetadata")]
+    partial class AddObjectAssetCustomMetadata
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder

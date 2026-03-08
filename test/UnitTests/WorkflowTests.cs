@@ -26,6 +26,7 @@ public sealed class WorkflowTests
         var coordinator = scope.ServiceProvider.GetRequiredService<IObjectAssetCoordinator>();
         var reader = scope.ServiceProvider.GetRequiredService<IObjectAssetReader>();
         var contentReader = scope.ServiceProvider.GetRequiredService<IObjectAssetContentReader>();
+        var registry = scope.ServiceProvider.GetRequiredService<IObjectAssetRegistry>();
 
         var order = new Order { Number = "ORD-001" };
         hostDbContext.Orders.Add(order);
@@ -35,7 +36,12 @@ public sealed class WorkflowTests
             OrderAssets.Invoice,
             CreateStream("invoice-v1"),
             "invoice-v1.pdf",
-            "application/pdf");
+            "application/pdf",
+            metadata: new Dictionary<string, string>
+            {
+                ["lang"] = "ar",
+                ["usage"] = "attachment"
+            });
 
         await coordinator.SaveChangesWithAssetsAsync(hostDbContext);
 
@@ -52,6 +58,11 @@ public sealed class WorkflowTests
         await using var assetContent = content.Content;
         using var readerStream = new StreamReader(assetContent, Encoding.UTF8);
         (await readerStream.ReadToEndAsync()).Should().Be("invoice-v1");
+
+        var descriptor = await registry.GetDescriptorAsync(invoice.AssetId);
+        descriptor.Should().NotBeNull();
+        descriptor!.Metadata.Should().ContainKey("lang").WhoseValue.Should().Be("ar");
+        descriptor.Metadata.Should().ContainKey("usage").WhoseValue.Should().Be("attachment");
     }
 
     [Test]
@@ -67,14 +78,24 @@ public sealed class WorkflowTests
             "text/plain",
             12,
             "hash-a",
-            "imports/import-a.txt");
+            "imports/import-a.txt",
+            new Dictionary<string, string>
+            {
+                ["lang"] = "ar",
+                ["variant"] = "primary"
+            });
         var secondDescriptor = CreateDescriptor(
             Guid.NewGuid(),
             "import-b.txt",
             "text/plain",
             24,
             "hash-b",
-            "imports/import-b.txt");
+            "imports/import-b.txt",
+            new Dictionary<string, string>
+            {
+                ["lang"] = "en",
+                ["variant"] = "secondary"
+            });
 
         var added = await registry.RegisterDescriptorAsync(new ObjectAssetDescriptorRegistrationRequest
         {
@@ -95,13 +116,24 @@ public sealed class WorkflowTests
             }
         ]);
 
-        var conflictingDescriptor = CreateDescriptor(
-            firstDescriptor.AssetId,
-            "import-a-renamed.txt",
-            firstDescriptor.ContentType,
-            firstDescriptor.Length,
-            firstDescriptor.Hash,
-            firstDescriptor.ObjectKey);
+        var conflictingDescriptor = new ObjectAssetDescriptor
+        {
+            AssetId = firstDescriptor.AssetId,
+            FileName = firstDescriptor.FileName,
+            ContentType = firstDescriptor.ContentType,
+            Length = firstDescriptor.Length,
+            Hash = firstDescriptor.Hash,
+            Bucket = firstDescriptor.Bucket,
+            ObjectKey = firstDescriptor.ObjectKey,
+            CreatedAtUtc = firstDescriptor.CreatedAtUtc,
+            ExpiresAtUtc = firstDescriptor.ExpiresAtUtc,
+            Metadata = new Dictionary<string, string>
+            {
+                ["lang"] = "en",
+                ["variant"] = "primary"
+            },
+            DescriptorVersion = ObjectAssetDescriptor.CurrentVersion
+        };
         var conflict = await registry.RegisterDescriptorAsync(new ObjectAssetDescriptorRegistrationRequest
         {
             Descriptor = conflictingDescriptor,
@@ -115,9 +147,10 @@ public sealed class WorkflowTests
         bulk.Should().ContainSingle();
         bulk[0].Outcome.Should().Be(ObjectAssetDescriptorRegistrationOutcome.Added);
         conflict.Outcome.Should().Be(ObjectAssetDescriptorRegistrationOutcome.RejectedConflict);
-        conflict.ConflictFields.Should().Contain(nameof(ObjectAssetDescriptor.FileName));
+        conflict.ConflictFields.Should().Contain(nameof(ObjectAssetDescriptor.Metadata));
         descriptors.Should().HaveCount(2);
         descriptors[firstDescriptor.AssetId].ObjectKey.Should().Be(firstDescriptor.ObjectKey);
+        descriptors[firstDescriptor.AssetId].Metadata.Should().ContainKey("lang").WhoseValue.Should().Be("ar");
         descriptors[secondDescriptor.AssetId].FileName.Should().Be(secondDescriptor.FileName);
     }
 
@@ -177,6 +210,7 @@ public sealed class WorkflowTests
         var bindingFinalizer = scope.ServiceProvider.GetRequiredService<IObjectAssetBindingFinalizer>();
         var reader = scope.ServiceProvider.GetRequiredService<IObjectAssetReader>();
         var contentReader = scope.ServiceProvider.GetRequiredService<IObjectAssetContentReader>();
+        var registry = scope.ServiceProvider.GetRequiredService<IObjectAssetRegistry>();
         var osaDbContext = scope.ServiceProvider.GetRequiredService<ObjectStorageAssetDbContext>();
 
         var tempBindingOne = Guid.NewGuid();
@@ -188,7 +222,12 @@ public sealed class WorkflowTests
                 OrderAssets.Invoice,
                 CreateStream("draft-invoice-1"),
                 "draft-invoice-1.pdf",
-                "application/pdf");
+                "application/pdf",
+                metadata: new Dictionary<string, string>
+                {
+                    ["lang"] = "ar",
+                    ["groupid"] = "group-a"
+                });
         var tempInvoiceTwo = await tempSessionFactory.For<Order>(
                 tempBindingTwo,
                 DateTimeOffset.UtcNow.AddMinutes(15))
@@ -196,7 +235,12 @@ public sealed class WorkflowTests
                 OrderAssets.Invoice,
                 CreateStream("draft-invoice-2"),
                 "draft-invoice-2.pdf",
-                "application/pdf");
+                "application/pdf",
+                metadata: new Dictionary<string, string>
+                {
+                    ["lang"] = "en",
+                    ["groupid"] = "group-b"
+                });
 
         var tempContent = await contentReader.OpenReadAsync(tempInvoiceOne.AssetId);
         tempContent.Should().NotBeNull();
@@ -227,6 +271,8 @@ public sealed class WorkflowTests
 
         var invoiceOne = await reader.GetSingleAsync(orderOne, OrderAssets.Invoice);
         var invoiceTwo = await reader.GetSingleAsync(orderTwo, OrderAssets.Invoice);
+        var descriptorOne = await registry.GetDescriptorAsync(tempInvoiceOne.AssetId);
+        var descriptorTwo = await registry.GetDescriptorAsync(tempInvoiceTwo.AssetId);
         var finalizedAssets = await osaDbContext.ObjectAssets
             .AsNoTracking()
             .Where(x => x.Id == tempInvoiceOne.AssetId || x.Id == tempInvoiceTwo.AssetId)
@@ -239,6 +285,11 @@ public sealed class WorkflowTests
         invoiceOne!.AssetId.Should().Be(tempInvoiceOne.AssetId);
         invoiceTwo.Should().NotBeNull();
         invoiceTwo!.AssetId.Should().Be(tempInvoiceTwo.AssetId);
+        descriptorOne.Should().NotBeNull();
+        descriptorOne!.Metadata.Should().ContainKey("lang").WhoseValue.Should().Be("ar");
+        descriptorOne.Metadata.Should().ContainKey("groupid").WhoseValue.Should().Be("group-a");
+        descriptorTwo.Should().NotBeNull();
+        descriptorTwo!.Metadata.Should().ContainKey("lang").WhoseValue.Should().Be("en");
         finalizedAssets.Should().HaveCount(2);
         finalizedAssets.Should().OnlyContain(x => x.TemporaryBindingId == null);
         finalizedAssets.Select(x => x.OwnerKeyInt64).Should().Contain((long)orderOne.Id);
@@ -589,7 +640,8 @@ public sealed class WorkflowTests
         string contentType,
         long length,
         string hash,
-        string objectKey)
+        string objectKey,
+        IReadOnlyDictionary<string, string>? metadata = null)
     {
         return new ObjectAssetDescriptor
         {
@@ -602,6 +654,7 @@ public sealed class WorkflowTests
             ObjectKey = objectKey,
             CreatedAtUtc = DateTimeOffset.UtcNow.AddMinutes(-10),
             ExpiresAtUtc = null,
+            Metadata = metadata ?? new Dictionary<string, string>(),
             DescriptorVersion = ObjectAssetDescriptor.CurrentVersion
         };
     }

@@ -58,6 +58,7 @@ internal sealed class ObjectAssetTemporarySessionFactory(
             string fileName,
             string? contentType,
             DateTimeOffset? expiresAtUtc = null,
+            IReadOnlyDictionary<string, string>? metadata = null,
             CancellationToken cancellationToken = default)
         {
             var slotDefinition = _ownerDefinition.GetRequiredSlot(slot);
@@ -85,7 +86,7 @@ internal sealed class ObjectAssetTemporarySessionFactory(
                     .ConfigureAwait(false);
             }
 
-            return await UploadAsync(slot, content, fileName, contentType, expiresAtUtc, cancellationToken).ConfigureAwait(false);
+            return await UploadAsync(slot, content, fileName, contentType, expiresAtUtc, metadata, cancellationToken).ConfigureAwait(false);
         }
 
         public Task<ObjectAssetReferenceDto> AddAsync(
@@ -94,6 +95,7 @@ internal sealed class ObjectAssetTemporarySessionFactory(
             string fileName,
             string? contentType,
             DateTimeOffset? expiresAtUtc = null,
+            IReadOnlyDictionary<string, string>? metadata = null,
             CancellationToken cancellationToken = default)
         {
             var slotDefinition = _ownerDefinition.GetRequiredSlot(slot);
@@ -103,7 +105,7 @@ internal sealed class ObjectAssetTemporarySessionFactory(
                     $"Slot '{slot.Name}' does not allow AddAsync because it is configured as '{slotDefinition.Multiplicity}'.");
             }
 
-            return UploadAsync(slot, content, fileName, contentType, expiresAtUtc, cancellationToken);
+            return UploadAsync(slot, content, fileName, contentType, expiresAtUtc, metadata, cancellationToken);
         }
 
         public async Task RemoveAsync(Guid assetId, CancellationToken cancellationToken = default)
@@ -141,6 +143,7 @@ internal sealed class ObjectAssetTemporarySessionFactory(
             string fileName,
             string? contentType,
             DateTimeOffset? expiresAtUtc,
+            IReadOnlyDictionary<string, string>? metadata,
             CancellationToken cancellationToken)
         {
             var bufferedContent = await ObjectAssetBufferedContent.CreateAsync(
@@ -148,6 +151,7 @@ internal sealed class ObjectAssetTemporarySessionFactory(
                     fileName,
                     contentType,
                     expiresAtUtc,
+                    metadata,
                     cancellationToken)
                 .ConfigureAwait(false);
 

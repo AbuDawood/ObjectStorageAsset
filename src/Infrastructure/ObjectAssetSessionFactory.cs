@@ -35,6 +35,7 @@ internal sealed class ObjectAssetSessionFactory(
             string fileName,
             string? contentType,
             DateTimeOffset? expiresAtUtc = null,
+            IReadOnlyDictionary<string, string>? metadata = null,
             CancellationToken cancellationToken = default)
         {
             var slotDefinition = _ownerDefinition.GetRequiredSlot(slot);
@@ -49,6 +50,7 @@ internal sealed class ObjectAssetSessionFactory(
                     fileName,
                     contentType,
                     expiresAtUtc,
+                    metadata,
                     cancellationToken)
                 .ConfigureAwait(false);
 
@@ -65,6 +67,7 @@ internal sealed class ObjectAssetSessionFactory(
             string fileName,
             string? contentType,
             DateTimeOffset? expiresAtUtc = null,
+            IReadOnlyDictionary<string, string>? metadata = null,
             CancellationToken cancellationToken = default)
         {
             var slotDefinition = _ownerDefinition.GetRequiredSlot(slot);
@@ -79,6 +82,7 @@ internal sealed class ObjectAssetSessionFactory(
                     fileName,
                     contentType,
                     expiresAtUtc,
+                    metadata,
                     cancellationToken)
                 .ConfigureAwait(false);
 

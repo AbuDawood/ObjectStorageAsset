@@ -65,6 +65,9 @@ internal sealed class ObjectAssetConfiguration : IEntityTypeConfiguration<Object
         builder.Property(x => x.ProviderVersionId)
             .HasMaxLength(128);
 
+        builder.Property(x => x.CustomMetadataJson)
+            .IsRequired();
+
         builder.Property(x => x.OwnershipMode)
             .IsRequired();
 

@@ -18,11 +18,16 @@ internal sealed class ObjectAssetBufferedContent
 
     public DateTimeOffset? ExpiresAtUtc { get; init; }
 
+    public required IReadOnlyDictionary<string, string> Metadata { get; init; }
+
+    public required string MetadataJson { get; init; }
+
     public static async Task<ObjectAssetBufferedContent> CreateAsync(
         Stream content,
         string fileName,
         string? contentType,
         DateTimeOffset? expiresAtUtc,
+        IReadOnlyDictionary<string, string>? metadata,
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(content);
@@ -37,6 +42,7 @@ internal sealed class ObjectAssetBufferedContent
 
         var bytes = buffer.ToArray();
         var sha256 = Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant();
+        var normalizedMetadata = ObjectAssetMetadataBagSerializer.Normalize(metadata);
 
         return new ObjectAssetBufferedContent
         {
@@ -48,7 +54,9 @@ internal sealed class ObjectAssetBufferedContent
                 : contentType.Trim(),
             SizeBytes = bytes.LongLength,
             Sha256 = sha256,
-            ExpiresAtUtc = expiresAtUtc
+            ExpiresAtUtc = expiresAtUtc,
+            Metadata = normalizedMetadata,
+            MetadataJson = ObjectAssetMetadataBagSerializer.Serialize(normalizedMetadata)
         };
     }
 }

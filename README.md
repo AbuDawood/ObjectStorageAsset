@@ -117,6 +117,7 @@ Current persistence shape:
 - owner binding columns on `ObjectAssets`
 - stable `AssetId` as the immutable primary identifier for every asset row
 - optional temporary binding fields and ownership mode on `ObjectAssets`
+- immutable custom metadata bag stored as normalized JSON on `ObjectAssets`
 - SQL Server `rowversion` for optimistic concurrency on asset updates
 - computed enum label columns such as `StatusLabel`
 
@@ -175,8 +176,27 @@ var order = new Order { Number = request.Number };
 dbContext.Orders.Add(order);
 
 var assets = assetSessionFactory.For(order);
-await assets.SetSingleAsync(OrderAssets.Invoice, fileStream, "invoice.pdf", "application/pdf", ct: cancellationToken);
-await assets.AddAsync(OrderAssets.Attachments, attachmentStream, "proof.txt", "text/plain", ct: cancellationToken);
+await assets.SetSingleAsync(
+    OrderAssets.Invoice,
+    fileStream,
+    "invoice.pdf",
+    "application/pdf",
+    metadata: new Dictionary<string, string>
+    {
+        ["lang"] = "ar",
+        ["usage"] = "attachment"
+    },
+    ct: cancellationToken);
+await assets.AddAsync(
+    OrderAssets.Attachments,
+    attachmentStream,
+    "proof.txt",
+    "text/plain",
+    metadata: new Dictionary<string, string>
+    {
+        ["variant"] = "secondary"
+    },
+    ct: cancellationToken);
 
 await assetCoordinator.SaveChangesWithAssetsAsync(dbContext, cancellationToken);
 ```
@@ -186,6 +206,7 @@ Current command-side behavior:
 - new assets are persisted as `PendingUpload`, uploaded to the provider, then finalized as `Active`
 - failed uploads are retained as `UploadFailed`
 - single-slot replacement deletes the previous asset before inserting the new one
+- optional custom metadata is captured at upload time and becomes immutable descriptor state
 - intentional delete follows the configured logical/physical delete mode
 
 Temporary uploads can be stored before the real owner key exists:
@@ -198,6 +219,11 @@ var invoice = await temporaryAssets.SetSingleAsync(
     fileStream,
     "draft-invoice.pdf",
     "application/pdf",
+    metadata: new Dictionary<string, string>
+    {
+        ["lang"] = "ar",
+        ["groupid"] = Guid.NewGuid().ToString("D")
+    },
     cancellationToken: cancellationToken);
 
 await hostDbContext.SaveChangesAsync(cancellationToken);
@@ -207,6 +233,7 @@ await bindingFinalizer.FinalizeTemporaryBindingAsync(temporaryBindingId, order, 
 Current temporary-binding behavior:
 - uploads are persisted immediately and receive a stable `AssetId` up front
 - temporary bindings expire independently from asset content expiry
+- custom metadata survives from temporary upload through finalization without rebinding changes
 - finalization preserves the same `AssetId` and only moves the binding onto the concrete owner
 
 ## Read Workflow
@@ -242,7 +269,7 @@ var descriptors = await assetRegistry.GetDescriptorsAsync(assetIds, cancellation
 Descriptor registration supports:
 - add if missing
 - ignore if identical
-- reject when the same `AssetId` conflicts on descriptor metadata or ownership mode
+- reject when the same `AssetId` conflicts on descriptor metadata, custom metadata, or ownership mode
 
 Descriptor payload shape:
 - `AssetId`
@@ -254,7 +281,14 @@ Descriptor payload shape:
 - `ObjectKey`
 - `CreatedAtUtc`
 - `ExpiresAtUtc`
+- `Metadata`
 - `DescriptorVersion`
+
+Custom metadata bag rules:
+- optional string key/value dictionary
+- host-agnostic and not interpreted by OSA
+- exported, imported, and returned on descriptor reads
+- normalized for conflict-safe comparison on shared `AssetId`
 
 ## Automated Test Infrastructure
 

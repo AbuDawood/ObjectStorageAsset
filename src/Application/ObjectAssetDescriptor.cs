@@ -5,7 +5,7 @@ namespace Elf.ObjectStorageAsset.Application;
 /// </summary>
 public sealed class ObjectAssetDescriptor
 {
-    public const int CurrentVersion = 1;
+    public const int CurrentVersion = 2;
 
     public required Guid AssetId { get; init; }
 
@@ -24,6 +24,8 @@ public sealed class ObjectAssetDescriptor
     public required DateTimeOffset CreatedAtUtc { get; init; }
 
     public DateTimeOffset? ExpiresAtUtc { get; init; }
+
+    public IReadOnlyDictionary<string, string> Metadata { get; init; } = new Dictionary<string, string>();
 
     public int DescriptorVersion { get; init; } = CurrentVersion;
 }
