@@ -84,6 +84,9 @@ internal sealed class ObjectAssetConfiguration : IEntityTypeConfiguration<Object
         builder.Property(x => x.LastStatusChangedAtUtc)
             .IsRequired();
 
+        builder.Property(x => x.RowVersion)
+            .IsRowVersion();
+
         builder.HasIndex(x => x.ObjectKey)
             .IsUnique();
 

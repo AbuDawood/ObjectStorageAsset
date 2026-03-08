@@ -353,6 +353,45 @@ public sealed class WorkflowTests
     }
 
     [Test]
+    public async Task ObjectAsset_ShouldUseRowVersionToRejectStaleConcurrentUpdates()
+    {
+        await using var fixture = await SqlServerFixture.CreateAsync();
+        await using var hostDbContext = fixture.CreateHostDbContext();
+        using var setupScope = fixture.RootProvider.CreateScope();
+        using var scopeOne = fixture.RootProvider.CreateScope();
+        using var scopeTwo = fixture.RootProvider.CreateScope();
+
+        var tempSessionFactory = setupScope.ServiceProvider.GetRequiredService<IObjectAssetTemporarySessionFactory>();
+        var osaDbContextOne = scopeOne.ServiceProvider.GetRequiredService<ObjectStorageAssetDbContext>();
+        var osaDbContextTwo = scopeTwo.ServiceProvider.GetRequiredService<ObjectStorageAssetDbContext>();
+
+        var order = new Order { Number = "ORD-CONC-001" };
+        hostDbContext.Orders.Add(order);
+        await hostDbContext.SaveChangesAsync();
+
+        var tempAsset = await tempSessionFactory.For<Order>(
+                Guid.NewGuid(),
+                DateTimeOffset.UtcNow.AddMinutes(15))
+            .SetSingleAsync(
+                OrderAssets.Invoice,
+                CreateStream("concurrent"),
+                "concurrent.pdf",
+                "application/pdf");
+
+        var assetOne = await osaDbContextOne.ObjectAssets.SingleAsync(x => x.Id == tempAsset.AssetId);
+        var assetTwo = await osaDbContextTwo.ObjectAssets.SingleAsync(x => x.Id == tempAsset.AssetId);
+
+        assetOne.BindOwner(order.Id);
+        await osaDbContextOne.SaveChangesAsync();
+
+        assetTwo.BindOwner(order.Id);
+
+        var act = async () => await osaDbContextTwo.SaveChangesAsync();
+
+        await act.Should().ThrowAsync<DbUpdateConcurrencyException>();
+    }
+
+    [Test]
     public async Task QueryBridge_ShouldJoinOrdersWithInvoiceAndAttachmentSummary()
     {
         await using var fixture = await SqlServerFixture.CreateAsync();

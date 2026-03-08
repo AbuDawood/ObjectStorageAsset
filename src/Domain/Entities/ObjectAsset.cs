@@ -69,6 +69,8 @@ public sealed class ObjectAsset
 
     public DateTimeOffset LastStatusChangedAtUtc { get; private set; }
 
+    public byte[] RowVersion { get; private set; } = [];
+
     public static ObjectAsset CreatePendingUpload(
         Guid id,
         string ownerType,

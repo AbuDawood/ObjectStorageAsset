@@ -117,6 +117,7 @@ Current persistence shape:
 - owner binding columns on `ObjectAssets`
 - stable `AssetId` as the immutable primary identifier for every asset row
 - optional temporary binding fields and ownership mode on `ObjectAssets`
+- SQL Server `rowversion` for optimistic concurrency on asset updates
 - computed enum label columns such as `StatusLabel`
 
 The first migration is generated from `ObjectStorageAssetDbContext`.

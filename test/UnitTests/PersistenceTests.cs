@@ -57,6 +57,18 @@ public sealed class PersistenceTests
         computedColumnSql.Should().Contain("DeleteFailed");
     }
 
+    [Test]
+    public void ObjectStorageAssetDbContext_ShouldConfigureRowVersionAsConcurrencyToken()
+    {
+        var context = CreateContext();
+        var entityType = context.Model.FindEntityType(typeof(ObjectAsset))!;
+        var rowVersion = entityType.FindProperty(nameof(ObjectAsset.RowVersion));
+
+        rowVersion.Should().NotBeNull();
+        rowVersion!.IsConcurrencyToken.Should().BeTrue();
+        rowVersion.ValueGenerated.Should().Be(ValueGenerated.OnAddOrUpdate);
+    }
+
     private static ObjectStorageAssetDbContext CreateContext(string schema = "osa")
     {
         var options = new DbContextOptionsBuilder<ObjectStorageAssetDbContext>()
