@@ -26,7 +26,7 @@ public sealed class ObjectStorageAssetOptions
     public bool PhysicallyDeleteRequestedAssets { get; set; } = true;
 
     /// <summary>
-    /// When true, expired assets remove the physical object during expiry processing.
+    /// When true, expired temporary assets remove the physical object during expiry processing.
     /// </summary>
     public bool PhysicallyDeleteExpiredAssets { get; set; } = true;
 

@@ -25,10 +25,9 @@ internal sealed class ObjectAssetMaintenanceService(
         var effectiveUtcNow = utcNow ?? DateTimeOffset.UtcNow;
         var expiredAssets = await _objectStorageAssetDbContext.ObjectAssets
             .Where(x => x.Status == ObjectAssetStatus.Active
-                        && ((x.ExpiresAtUtc.HasValue && x.ExpiresAtUtc <= effectiveUtcNow)
-                            || (x.TemporaryBindingId.HasValue
-                                && x.TemporaryBindingExpiresAtUtc.HasValue
-                                && x.TemporaryBindingExpiresAtUtc <= effectiveUtcNow)))
+                        && x.TemporaryBindingId.HasValue
+                        && x.TemporaryBindingExpiresAtUtc.HasValue
+                        && x.TemporaryBindingExpiresAtUtc <= effectiveUtcNow)
             .ToListAsync(cancellationToken)
             .ConfigureAwait(false);
 

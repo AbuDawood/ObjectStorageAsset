@@ -16,7 +16,7 @@ internal static class ObjectAssetReferenceMapper
             SizeBytes = asset.SizeBytes,
             Status = asset.Status,
             CreatedAtUtc = asset.CreatedAtUtc,
-            ExpiresAtUtc = asset.ExpiresAtUtc
+            ExpiresAtUtc = null
         };
     }
 }

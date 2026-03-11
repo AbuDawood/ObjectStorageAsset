@@ -21,6 +21,7 @@ Current implementation state:
 - A dedicated live E2E runner is available under `test/LiveE2E`
 
 Contribution rules and engineering conventions are documented in `CONTRIBUTING.md`.
+Version history is documented in `CHANGELOG.md`.
 
 ## Solution Layout
 
@@ -232,9 +233,9 @@ await bindingFinalizer.FinalizeTemporaryBindingAsync(temporaryBindingId, order, 
 
 Current temporary-binding behavior:
 - uploads are persisted immediately and receive a stable `AssetId` up front
-- temporary bindings expire independently from asset content expiry
+- temporary bindings can expire before finalization and be cleaned by maintenance
 - custom metadata survives from temporary upload through finalization without rebinding changes
-- finalization preserves the same `AssetId` and only moves the binding onto the concrete owner
+- finalization preserves the same `AssetId`, moves the binding onto the concrete owner, and clears delete-timer fields so the asset becomes permanent
 
 ## Read Workflow
 
@@ -266,6 +267,8 @@ var descriptor = await assetRegistry.GetDescriptorAsync(assetId, cancellationTok
 var descriptors = await assetRegistry.GetDescriptorsAsync(assetIds, cancellationToken);
 ```
 
+Only finalized, non-temporary active assets can be exported as descriptors.
+
 Descriptor registration supports:
 - add if missing
 - ignore if identical
@@ -280,7 +283,7 @@ Descriptor payload shape:
 - `Bucket`
 - `ObjectKey`
 - `CreatedAtUtc`
-- `ExpiresAtUtc`
+- `ExpiresAtUtc` (`null` for current finalized descriptors; retained for compatibility)
 - `Metadata`
 - `DescriptorVersion`
 
@@ -382,7 +385,7 @@ Reconciliation now also surfaces:
 - referenced-only assets
 
 When `EnableMaintenanceWorker` is enabled:
-- expired assets are processed on the configured interval
+- expired temporary assets are processed on the configured interval
 - pending deletes are retried
 - delete failures are retried
 

@@ -204,7 +204,7 @@ public sealed class ObjectAsset
             OwnershipMode = ownershipMode,
             CustomMetadataJson = NormalizeCustomMetadataJson(customMetadataJson),
             Status = ObjectAssetStatus.Active,
-            ExpiresAtUtc = expiresAtUtc,
+            ExpiresAtUtc = null,
             CreatedAtUtc = createdAtUtc,
             UploadedAtUtc = createdAtUtc,
             LastStatusChangedAtUtc = createdAtUtc
@@ -318,6 +318,7 @@ public sealed class ObjectAsset
         UploadedAtUtc = uploadedAtUtc;
         ETag = string.IsNullOrWhiteSpace(eTag) ? null : eTag.Trim();
         ProviderVersionId = string.IsNullOrWhiteSpace(providerVersionId) ? null : providerVersionId.Trim();
+        ExpiresAtUtc = null;
         ErrorMessage = null;
         Status = ObjectAssetStatus.Active;
         LastStatusChangedAtUtc = uploadedAtUtc;

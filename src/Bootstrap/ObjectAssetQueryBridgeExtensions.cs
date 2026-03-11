@@ -99,7 +99,7 @@ public static class ObjectAssetQueryBridgeExtensions
                     SizeBytes = x.SizeBytes,
                     Status = x.Status,
                     CreatedAtUtc = x.CreatedAtUtc,
-                    ExpiresAtUtc = x.ExpiresAtUtc
+                    ExpiresAtUtc = null
                 });
         }
 
@@ -119,7 +119,7 @@ public static class ObjectAssetQueryBridgeExtensions
                     SizeBytes = x.SizeBytes,
                     Status = x.Status,
                     CreatedAtUtc = x.CreatedAtUtc,
-                    ExpiresAtUtc = x.ExpiresAtUtc
+                    ExpiresAtUtc = null
                 });
         }
 
@@ -139,7 +139,7 @@ public static class ObjectAssetQueryBridgeExtensions
                     SizeBytes = x.SizeBytes,
                     Status = x.Status,
                     CreatedAtUtc = x.CreatedAtUtc,
-                    ExpiresAtUtc = x.ExpiresAtUtc
+                    ExpiresAtUtc = null
                 });
         }
 
@@ -159,7 +159,7 @@ public static class ObjectAssetQueryBridgeExtensions
                     SizeBytes = x.SizeBytes,
                     Status = x.Status,
                     CreatedAtUtc = x.CreatedAtUtc,
-                    ExpiresAtUtc = x.ExpiresAtUtc
+                    ExpiresAtUtc = null
                 });
         }
 

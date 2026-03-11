@@ -23,7 +23,9 @@ internal sealed class ObjectAssetRegistry(ObjectStorageAssetDbContext objectStor
         var asset = await _objectStorageAssetDbContext.ObjectAssets
             .AsNoTracking()
             .FirstOrDefaultAsync(
-                x => x.Id == assetId && x.Status == ObjectAssetStatus.Active,
+                x => x.Id == assetId
+                     && x.Status == ObjectAssetStatus.Active
+                     && x.TemporaryBindingId == null,
                 cancellationToken)
             .ConfigureAwait(false);
 
@@ -49,7 +51,9 @@ internal sealed class ObjectAssetRegistry(ObjectStorageAssetDbContext objectStor
 
         var assets = await _objectStorageAssetDbContext.ObjectAssets
             .AsNoTracking()
-            .Where(x => x.Status == ObjectAssetStatus.Active && keys.Contains(x.Id))
+            .Where(x => x.Status == ObjectAssetStatus.Active
+                        && x.TemporaryBindingId == null
+                        && keys.Contains(x.Id))
             .ToListAsync(cancellationToken)
             .ConfigureAwait(false);
 
@@ -193,11 +197,6 @@ internal sealed class ObjectAssetRegistry(ObjectStorageAssetDbContext objectStor
             conflicts.Add(nameof(ObjectAssetDescriptor.CreatedAtUtc));
         }
 
-        if (existingDescriptor.ExpiresAtUtc != descriptor.ExpiresAtUtc)
-        {
-            conflicts.Add(nameof(ObjectAssetDescriptor.ExpiresAtUtc));
-        }
-
         if (!AreMetadataEqual(existingDescriptor.Metadata, descriptor.Metadata))
         {
             conflicts.Add(nameof(ObjectAssetDescriptor.Metadata));
@@ -223,7 +222,7 @@ internal sealed class ObjectAssetRegistry(ObjectStorageAssetDbContext objectStor
             Bucket = asset.BucketName,
             ObjectKey = asset.ObjectKey,
             CreatedAtUtc = asset.CreatedAtUtc,
-            ExpiresAtUtc = asset.ExpiresAtUtc,
+            ExpiresAtUtc = null,
             Metadata = ObjectAssetMetadataBagSerializer.Deserialize(asset.CustomMetadataJson),
             DescriptorVersion = ObjectAssetDescriptor.CurrentVersion
         };

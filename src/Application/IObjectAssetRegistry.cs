@@ -2,6 +2,7 @@ namespace Elf.ObjectStorageAsset.Application;
 
 /// <summary>
 /// Reads and registers portable asset descriptors by AssetId.
+/// Only finalized, non-temporary active assets can be exported as descriptors.
 /// </summary>
 public interface IObjectAssetRegistry
 {

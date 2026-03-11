@@ -83,7 +83,8 @@ public sealed class WorkflowTests
             {
                 ["lang"] = "ar",
                 ["variant"] = "primary"
-            });
+            },
+            DateTimeOffset.UtcNow.AddMinutes(-30));
         var secondDescriptor = CreateDescriptor(
             Guid.NewGuid(),
             "import-b.txt",
@@ -150,6 +151,7 @@ public sealed class WorkflowTests
         conflict.ConflictFields.Should().Contain(nameof(ObjectAssetDescriptor.Metadata));
         descriptors.Should().HaveCount(2);
         descriptors[firstDescriptor.AssetId].ObjectKey.Should().Be(firstDescriptor.ObjectKey);
+        descriptors[firstDescriptor.AssetId].ExpiresAtUtc.Should().BeNull();
         descriptors[firstDescriptor.AssetId].Metadata.Should().ContainKey("lang").WhoseValue.Should().Be("ar");
         descriptors[secondDescriptor.AssetId].FileName.Should().Be(secondDescriptor.FileName);
     }
@@ -294,6 +296,55 @@ public sealed class WorkflowTests
         finalizedAssets.Should().OnlyContain(x => x.TemporaryBindingId == null);
         finalizedAssets.Select(x => x.OwnerKeyInt64).Should().Contain((long)orderOne.Id);
         finalizedAssets.Select(x => x.OwnerKeyInt64).Should().Contain((long)orderTwo.Id);
+    }
+
+    [Test]
+    public async Task TemporaryAsset_ShouldRequireFinalizationBeforeDescriptorExport_AndShouldBecomePermanentAfterFinalization()
+    {
+        await using var fixture = await SqlServerFixture.CreateAsync(physicallyDeleteExpiredAssets: true);
+        await using var hostDbContext = fixture.CreateHostDbContext();
+        using var scope = fixture.RootProvider.CreateScope();
+
+        var tempSessionFactory = scope.ServiceProvider.GetRequiredService<IObjectAssetTemporarySessionFactory>();
+        var bindingFinalizer = scope.ServiceProvider.GetRequiredService<IObjectAssetBindingFinalizer>();
+        var registry = scope.ServiceProvider.GetRequiredService<IObjectAssetRegistry>();
+        var maintenanceService = scope.ServiceProvider.GetRequiredService<IObjectAssetMaintenanceService>();
+        var osaDbContext = scope.ServiceProvider.GetRequiredService<ObjectStorageAssetDbContext>();
+
+        var temporaryBindingId = Guid.NewGuid();
+        var temporaryAsset = await tempSessionFactory.For<Order>(
+                temporaryBindingId,
+                DateTimeOffset.UtcNow.AddMinutes(-10))
+            .SetSingleAsync(
+                OrderAssets.Invoice,
+                CreateStream("draft-permanent"),
+                "draft-permanent.pdf",
+                "application/pdf",
+                DateTimeOffset.UtcNow.AddMinutes(-5));
+
+        var descriptorBeforeFinalization = await registry.GetDescriptorAsync(temporaryAsset.AssetId);
+
+        var order = new Order { Number = "ORD-TEMP-FINALIZE" };
+        hostDbContext.Orders.Add(order);
+        await hostDbContext.SaveChangesAsync();
+
+        var finalization = await bindingFinalizer.FinalizeTemporaryBindingAsync(temporaryBindingId, order);
+        var expiredCount = await maintenanceService.ExpireAssetsAsync(DateTimeOffset.UtcNow);
+        var descriptorAfterFinalization = await registry.GetDescriptorAsync(temporaryAsset.AssetId);
+        var asset = await osaDbContext.ObjectAssets
+            .AsNoTracking()
+            .SingleAsync(x => x.Id == temporaryAsset.AssetId);
+
+        descriptorBeforeFinalization.Should().BeNull();
+        finalization.FinalizedCount.Should().Be(1);
+        expiredCount.Should().Be(0);
+        descriptorAfterFinalization.Should().NotBeNull();
+        descriptorAfterFinalization!.ExpiresAtUtc.Should().BeNull();
+        asset.Status.Should().Be(ObjectAssetStatus.Active);
+        asset.TemporaryBindingId.Should().BeNull();
+        asset.TemporaryBindingExpiresAtUtc.Should().BeNull();
+        asset.ExpiresAtUtc.Should().BeNull();
+        fixture.StorageProvider.ContainsObject(asset.ObjectKey).Should().BeTrue();
     }
 
     [Test]
@@ -508,7 +559,7 @@ public sealed class WorkflowTests
     }
 
     [Test]
-    public async Task ExpireAssetsAsync_ShouldPhysicallyDeleteExpiredAssets_WhenConfigured()
+    public async Task ExpireAssetsAsync_ShouldIgnoreLegacyExpiryForFinalizedOwnerBoundAssets()
     {
         await using var fixture = await SqlServerFixture.CreateAsync(physicallyDeleteExpiredAssets: true);
         await using var hostDbContext = fixture.CreateHostDbContext();
@@ -533,10 +584,10 @@ public sealed class WorkflowTests
         var expiredCount = await maintenanceService.ExpireAssetsAsync(DateTimeOffset.UtcNow);
         var asset = await osaDbContext.ObjectAssets.AsNoTracking().SingleAsync();
 
-        expiredCount.Should().Be(1);
-        asset.Status.Should().Be(ObjectAssetStatus.Deleted);
-        asset.PhysicalDeletedAtUtc.Should().NotBeNull();
-        fixture.StorageProvider.ObjectKeys.Should().BeEmpty();
+        expiredCount.Should().Be(0);
+        asset.Status.Should().Be(ObjectAssetStatus.Active);
+        asset.ExpiresAtUtc.Should().BeNull();
+        fixture.StorageProvider.ContainsObject(asset.ObjectKey).Should().BeTrue();
     }
 
     [Test]
@@ -641,7 +692,8 @@ public sealed class WorkflowTests
         long length,
         string hash,
         string objectKey,
-        IReadOnlyDictionary<string, string>? metadata = null)
+        IReadOnlyDictionary<string, string>? metadata = null,
+        DateTimeOffset? expiresAtUtc = null)
     {
         return new ObjectAssetDescriptor
         {
@@ -653,7 +705,7 @@ public sealed class WorkflowTests
             Bucket = "osa-dev",
             ObjectKey = objectKey,
             CreatedAtUtc = DateTimeOffset.UtcNow.AddMinutes(-10),
-            ExpiresAtUtc = null,
+            ExpiresAtUtc = expiresAtUtc,
             Metadata = metadata ?? new Dictionary<string, string>(),
             DescriptorVersion = ObjectAssetDescriptor.CurrentVersion
         };
