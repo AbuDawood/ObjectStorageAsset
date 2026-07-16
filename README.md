@@ -233,7 +233,8 @@ await bindingFinalizer.FinalizeTemporaryBindingAsync(temporaryBindingId, order, 
 
 Current temporary-binding behavior:
 - uploads are persisted immediately and receive a stable `AssetId` up front
-- temporary bindings can expire before finalization and be cleaned by maintenance
+- finalization rejects expired temporary bindings before applying an owner binding
+- expired temporary bindings are cleaned by maintenance when they are not finalized in time
 - custom metadata survives from temporary upload through finalization without rebinding changes
 - finalization preserves the same `AssetId`, moves the binding onto the concrete owner, and clears delete-timer fields so the asset becomes permanent
 

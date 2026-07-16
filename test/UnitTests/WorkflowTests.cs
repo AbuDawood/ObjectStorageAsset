@@ -314,7 +314,7 @@ public sealed class WorkflowTests
         var temporaryBindingId = Guid.NewGuid();
         var temporaryAsset = await tempSessionFactory.For<Order>(
                 temporaryBindingId,
-                DateTimeOffset.UtcNow.AddMinutes(-10))
+                DateTimeOffset.UtcNow.AddMinutes(10))
             .SetSingleAsync(
                 OrderAssets.Invoice,
                 CreateStream("draft-permanent"),
@@ -344,6 +344,47 @@ public sealed class WorkflowTests
         asset.TemporaryBindingId.Should().BeNull();
         asset.TemporaryBindingExpiresAtUtc.Should().BeNull();
         asset.ExpiresAtUtc.Should().BeNull();
+        fixture.StorageProvider.ContainsObject(asset.ObjectKey).Should().BeTrue();
+    }
+
+    [Test]
+    public async Task TemporaryAsset_ShouldRejectFinalization_WhenTemporaryBindingExpired()
+    {
+        await using var fixture = await SqlServerFixture.CreateAsync();
+        await using var hostDbContext = fixture.CreateHostDbContext();
+        using var scope = fixture.RootProvider.CreateScope();
+
+        var tempSessionFactory = scope.ServiceProvider.GetRequiredService<IObjectAssetTemporarySessionFactory>();
+        var bindingFinalizer = scope.ServiceProvider.GetRequiredService<IObjectAssetBindingFinalizer>();
+        var osaDbContext = scope.ServiceProvider.GetRequiredService<ObjectStorageAssetDbContext>();
+
+        var temporaryBindingId = Guid.NewGuid();
+        var temporaryAsset = await tempSessionFactory.For<Order>(
+                temporaryBindingId,
+                DateTimeOffset.UtcNow.AddMinutes(-10))
+            .SetSingleAsync(
+                OrderAssets.Invoice,
+                CreateStream("expired-draft"),
+                "expired-draft.pdf",
+                "application/pdf");
+
+        var order = new Order { Number = "ORD-TEMP-EXPIRED" };
+        hostDbContext.Orders.Add(order);
+        await hostDbContext.SaveChangesAsync();
+
+        var act = async () => await bindingFinalizer.FinalizeTemporaryBindingAsync(temporaryBindingId, order);
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage($"*Temporary binding '{temporaryBindingId}' has expired and cannot be finalized*");
+
+        var asset = await osaDbContext.ObjectAssets
+            .AsNoTracking()
+            .SingleAsync(x => x.Id == temporaryAsset.AssetId);
+
+        asset.Status.Should().Be(ObjectAssetStatus.Active);
+        asset.OwnerKeyKind.Should().Be(ObjectAssetOwnerKeyKind.Unassigned);
+        asset.TemporaryBindingId.Should().Be(temporaryBindingId);
+        asset.TemporaryBindingExpiresAtUtc.Should().NotBeNull();
         fixture.StorageProvider.ContainsObject(asset.ObjectKey).Should().BeTrue();
     }
 

@@ -108,7 +108,6 @@ internal sealed class ObjectAssetLifecycleManager(
         }
 
         var assets = await BuildTemporaryBindingQuery(ownerDefinition, temporaryBindingId)
-            .Where(x => x.Status == ObjectAssetStatus.Active)
             .OrderBy(x => x.CreatedAtUtc)
             .ToListAsync(cancellationToken)
             .ConfigureAwait(false);
@@ -123,7 +122,31 @@ internal sealed class ObjectAssetLifecycleManager(
             };
         }
 
-        foreach (var group in assets.GroupBy(x => new { x.SlotName, x.SlotMultiplicity }))
+        var effectiveUtcNow = DateTimeOffset.UtcNow;
+        var expiredAssetIds = assets
+            .Where(x => x.HasExpiredTemporaryBinding(effectiveUtcNow))
+            .Select(x => x.Id)
+            .ToArray();
+        if (expiredAssetIds.Length > 0)
+        {
+            throw new InvalidOperationException(
+                $"Temporary binding '{temporaryBindingId}' has expired and cannot be finalized. AssetIds={string.Join(", ", expiredAssetIds)}.");
+        }
+
+        var activeAssets = assets
+            .Where(x => x.Status == ObjectAssetStatus.Active)
+            .ToArray();
+        if (activeAssets.Length == 0)
+        {
+            return new ObjectAssetTemporaryBindingFinalizationResult
+            {
+                TemporaryBindingId = temporaryBindingId,
+                AssetIds = [],
+                FinalizedCount = 0
+            };
+        }
+
+        foreach (var group in activeAssets.GroupBy(x => new { x.SlotName, x.SlotMultiplicity }))
         {
             if (group.Key.SlotMultiplicity == ObjectAssetSlotMultiplicity.Single)
             {
@@ -157,8 +180,8 @@ internal sealed class ObjectAssetLifecycleManager(
         return new ObjectAssetTemporaryBindingFinalizationResult
         {
             TemporaryBindingId = temporaryBindingId,
-            AssetIds = assets.Select(x => x.Id).ToArray(),
-            FinalizedCount = assets.Count
+            AssetIds = activeAssets.Select(x => x.Id).ToArray(),
+            FinalizedCount = activeAssets.Length
         };
     }
 
