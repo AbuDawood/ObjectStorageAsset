@@ -9,7 +9,8 @@ internal sealed class ObjectAssetTemporarySessionFactory(
     IObjectAssetBindingCatalog bindingCatalog,
     ObjectAssetLifecycleManager lifecycleManager,
     ObjectStorageAssetDbContext objectStorageAssetDbContext,
-    ObjectStorageAssetRuntimeOptions options)
+    ObjectStorageAssetRuntimeOptions options,
+    ObjectAssetStager stager)
     : IObjectAssetTemporarySessionFactory
 {
     private readonly IObjectAssetBindingCatalog _bindingCatalog = bindingCatalog;
@@ -33,7 +34,7 @@ internal sealed class ObjectAssetTemporarySessionFactory(
             ownerDefinition,
             _lifecycleManager,
             _objectStorageAssetDbContext,
-            _options);
+            _options, stager);
     }
 
     private sealed class ObjectAssetTemporarySession<T>(
@@ -42,7 +43,8 @@ internal sealed class ObjectAssetTemporarySessionFactory(
         ObjectAssetOwnerDefinition ownerDefinition,
         ObjectAssetLifecycleManager lifecycleManager,
         ObjectStorageAssetDbContext objectStorageAssetDbContext,
-        ObjectStorageAssetRuntimeOptions options)
+        ObjectStorageAssetRuntimeOptions options,
+        ObjectAssetStager stager)
         : IObjectAssetTemporarySession<T>
     {
         private readonly ObjectAssetOwnerDefinition _ownerDefinition = ownerDefinition;
@@ -115,7 +117,7 @@ internal sealed class ObjectAssetTemporarySessionFactory(
                 throw new InvalidOperationException("Object asset removal requires a non-empty asset id.");
             }
 
-            var asset = await _objectStorageAssetDbContext.ObjectAssets
+            var asset = await _objectStorageAssetDbContext.TemporaryAssets
                 .FirstOrDefaultAsync(
                     x => x.Id == assetId
                          && x.TemporaryBindingId == TemporaryBindingId
@@ -146,7 +148,7 @@ internal sealed class ObjectAssetTemporarySessionFactory(
             IReadOnlyDictionary<string, string>? metadata,
             CancellationToken cancellationToken)
         {
-            var bufferedContent = await ObjectAssetBufferedContent.CreateAsync(
+            await using var bufferedContent = await stager.StageAsync(
                     content,
                     fileName,
                     contentType,

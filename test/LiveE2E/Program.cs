@@ -2,6 +2,7 @@ using System.Text;
 using Microsoft.Data.SqlClient;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
 using Elf.ObjectStorageAsset.Application;
 using Elf.ObjectStorageAsset.Infrastructure.Persistence;
 using Elf.ObjectStorageAsset.Minio;
@@ -28,6 +29,10 @@ public static class Program
                 options.ConnectionString = settings.ConnectionString;
                 options.Schema = "osa";
                 options.DefaultStorageNamespace = settings.StorageNamespace;
+                options.LocalInstanceId = Guid.Parse("e881c485-171a-4086-9948-af78f4acf920");
+                options.StorageAuthorityId = Guid.Parse("05b4d4c8-5fc8-40d7-9ef9-4f74788929dd");
+                options.Integrity.FailureBehavior = Sha256FailureBehavior.Guard;
+                options.Integrity.Triggers = Sha256VerificationTriggers.AfterUpload | Sha256VerificationTriggers.OnRead;
                 options.PhysicallyDeleteRequestedAssets = true;
                 options.PhysicallyDeleteExpiredAssets = true;
                 options.AddBinding<OrderAssets>();
@@ -51,6 +56,7 @@ public static class Program
             {
                 var osaDbContext = scope.ServiceProvider.GetRequiredService<ObjectStorageAssetDbContext>();
                 await osaDbContext.Database.MigrateAsync().ConfigureAwait(false);
+                foreach (var hosted in rootProvider.GetServices<IHostedService>()) await hosted.StartAsync(default);
                 await CreateOrdersTableAsync(osaDbContext).ConfigureAwait(false);
 
                 await using var hostDbContext = CreateHostDbContext(settings.ConnectionString);
@@ -113,6 +119,10 @@ public static class Program
                             $"Live E2E invoice content mismatch. Actual '{contentText}'.");
                     }
                 }
+
+                if (content.Integrity?.Status != Domain.Enums.Sha256ValidationStatus.Valid)
+                    throw new InvalidOperationException("Live E2E expected persisted Valid SHA-256 evidence.");
+                await VerifyGuardAgainstRealStorageAsync(scope.ServiceProvider, invoice.AssetId);
 
                 var invoiceRefs = hostDbContext.ObjectAssetSingleRefsFor<Order, int>(bindingCatalog, OrderAssets.Invoice);
                 var attachmentSummaries = hostDbContext.ObjectAssetSlotSummariesFor<Order, int>(bindingCatalog, OrderAssets.Attachments);
@@ -211,6 +221,45 @@ public static class Program
                 await CleanupDatabaseAsync(settings).ConfigureAwait(false);
             }
         }
+    }
+
+    private static async Task VerifyGuardAgainstRealStorageAsync(IServiceProvider services, Guid assetId)
+    {
+        var descriptor = await services.GetRequiredService<IObjectAssetRegistry>().GetDescriptorAsync(assetId)
+            ?? throw new InvalidOperationException("Live E2E descriptor missing.");
+        var storage = services.GetRequiredService<IObjectStorageProvider>();
+        async Task PutAsync(string value)
+        {
+            await using var stream = CreateStream(value);
+            await storage.PutObjectAsync(new ObjectStoragePutRequest
+            {
+                BucketName = descriptor.Bucket,
+                ObjectKey = descriptor.ObjectKey,
+                Content = stream,
+                ContentLength = stream.Length,
+                ContentType = descriptor.ContentType,
+                Metadata = ObjectStorageSystemMetadata.Create(assetId,
+                    services.GetRequiredService<ObjectStorageAssetRuntimeOptions>().DefaultStorageNamespace, descriptor.Hash)
+            });
+        }
+        await PutAsync("tampered-live-content");
+        try
+        {
+            var content = await services.GetRequiredService<IObjectAssetContentReader>().OpenReadAsync(assetId);
+            if (content is not null) await content.Content.DisposeAsync();
+            throw new InvalidOperationException("Live E2E Guard exposed tampered content.");
+        }
+        catch (ObjectAssetIntegrityException ex) when (ex.Result.Status == Domain.Enums.Sha256ValidationStatus.Mismatch)
+        {
+            var row = await services.GetRequiredService<IObjectAssetPagedReader>().GetRecordAsync(assetId);
+            if (row?.Integrity?.Status != Domain.Enums.Sha256ValidationStatus.Mismatch)
+                throw new InvalidOperationException("Live E2E mismatch evidence was not persisted.");
+        }
+        finally { await PutAsync("live-invoice"); }
+        var valid = await services.GetRequiredService<IObjectAssetIntegrityService>().VerifyAsync(assetId);
+        if (valid.Status != Domain.Enums.Sha256ValidationStatus.Valid)
+            throw new InvalidOperationException("Live E2E restored content did not verify.");
+        Console.WriteLine("Real-storage E2E passed: after-upload/read verification, tamper rejection and persisted recovery.");
     }
 
     private static async Task CleanupObjectsAsync(ServiceProvider rootProvider)
@@ -349,8 +398,15 @@ public static class Program
         bool PreserveObjects,
         bool SkipDeleteWorkflow)
     {
-        public string ConnectionString =>
-            $"Server={SqlServer};Database={DatabaseName};User ID={SqlUser};Password={SqlPassword};TrustServerCertificate=True;";
+        public string ConnectionString => new SqlConnectionStringBuilder
+        {
+            DataSource = SqlServer,
+            InitialCatalog = DatabaseName,
+            TrustServerCertificate = true,
+            IntegratedSecurity = Environment.GetEnvironmentVariable("OSA_E2E_SQL_INTEGRATED_SECURITY") == "true",
+            UserID = Environment.GetEnvironmentVariable("OSA_E2E_SQL_INTEGRATED_SECURITY") == "true" ? "" : SqlUser,
+            Password = Environment.GetEnvironmentVariable("OSA_E2E_SQL_INTEGRATED_SECURITY") == "true" ? "" : SqlPassword
+        }.ConnectionString;
 
         public static LiveE2ESettings FromEnvironment()
         {

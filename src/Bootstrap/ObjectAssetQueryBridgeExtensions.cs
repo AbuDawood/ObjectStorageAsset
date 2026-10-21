@@ -26,6 +26,11 @@ public static class ObjectAssetQueryBridgeExtensions
         entity.Property(x => x.OriginalFileName).HasMaxLength(260).IsRequired();
         entity.Property(x => x.ContentType).HasMaxLength(256).IsRequired();
 
+        var identity = modelBuilder.Entity<ObjectAssetIdentityQueryModel>();
+        identity.ToTable("ObjectAssetIdentity", normalizedSchema, table => table.ExcludeFromMigrations());
+        identity.HasKey(x => x.AssetId);
+        identity.Property(x => x.AssetId).ValueGeneratedNever();
+
         return modelBuilder;
     }
 
@@ -51,6 +56,7 @@ public static class ObjectAssetQueryBridgeExtensions
             dbContext.Set<ObjectAssetQueryModel>()
                 .AsNoTracking()
                 .Where(x => x.OwnerType == ownerDefinition.OwnerType
+                            && x.BindingKind == ObjectAssetBindingKind.LocalOwner
                             && x.SlotName == slot.Name
                             && x.Status == ObjectAssetStatus.Active),
             ownerDefinition.OwnerKeyType);
@@ -72,6 +78,7 @@ public static class ObjectAssetQueryBridgeExtensions
             dbContext.Set<ObjectAssetQueryModel>()
                 .AsNoTracking()
                 .Where(x => x.OwnerType == ownerDefinition.OwnerType
+                            && x.BindingKind == ObjectAssetBindingKind.LocalOwner
                             && x.SlotName == slot.Name
                             && x.Status == ObjectAssetStatus.Active),
             ownerDefinition.OwnerKeyType);

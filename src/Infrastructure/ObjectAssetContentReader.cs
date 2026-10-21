@@ -7,7 +7,9 @@ namespace Elf.ObjectStorageAsset.Infrastructure;
 
 internal sealed class ObjectAssetContentReader(
     ObjectStorageAssetDbContext objectStorageAssetDbContext,
-    IObjectStorageProvider objectStorageProvider)
+    IObjectStorageProvider objectStorageProvider,
+    ObjectAssetIntegrityService integrity,
+    ObjectStorageAssetRuntimeOptions options)
     : IObjectAssetContentReader
 {
     private readonly ObjectStorageAssetDbContext _objectStorageAssetDbContext = objectStorageAssetDbContext;
@@ -22,37 +24,22 @@ internal sealed class ObjectAssetContentReader(
             throw new InvalidOperationException("Object asset content reads require a non-empty asset id.");
         }
 
-        var asset = await _objectStorageAssetDbContext.ObjectAssets
-            .AsNoTracking()
-            .FirstOrDefaultAsync(
-                x => x.Id == assetId && x.Status == ObjectAssetStatus.Active,
-                cancellationToken)
-            .ConfigureAwait(false);
-
-        if (asset is null)
+        var opened = await integrity.OpenAssetAsync(assetId, options.Integrity.Triggers.HasFlag(Sha256VerificationTriggers.OnRead),
+            ObjectAssetReadScope.Active, cancellationToken);
+        if (opened is null)
         {
             return null;
         }
-
-        var getResult = await _objectStorageProvider.GetObjectAsync(
-                new ObjectStorageGetRequest
-                {
-                    BucketName = asset.BucketName,
-                    ObjectKey = asset.ObjectKey,
-                    VersionId = asset.ProviderVersionId
-                },
-                cancellationToken)
-            .ConfigureAwait(false);
+        var asset = opened.Asset;
 
         return new ObjectAssetContentResult
         {
             AssetId = asset.Id,
             FileName = asset.OriginalFileName,
-            ContentType = string.IsNullOrWhiteSpace(getResult.ContentType)
-                ? asset.ContentType
-                : getResult.ContentType,
+            ContentType = asset.ContentType,
             SizeBytes = asset.SizeBytes,
-            Content = getResult.Content
+            Content = opened.Content,
+            Integrity = opened.Integrity
         };
     }
 }

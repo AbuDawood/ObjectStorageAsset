@@ -2,13 +2,14 @@ using System.Text;
 using Microsoft.Data.SqlClient;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
 using Elf.ObjectStorageAsset.Application;
 using Elf.ObjectStorageAsset.Infrastructure.Persistence;
 using Elf.ObjectStorageAsset.TestSupport.TestDoubles;
 
 namespace Elf.ObjectStorageAsset.InMemoryE2E;
 
-public static class Program
+public static partial class Program
 {
     public static async Task<int> Main()
     {
@@ -27,6 +28,8 @@ public static class Program
                 options.ConnectionString = settings.ConnectionString;
                 options.Schema = "osa";
                 options.DefaultStorageNamespace = "inmemory-e2e";
+                options.LocalInstanceId = Guid.Parse("a47bfd06-63aa-4af9-b4ce-65b9c823b2ca");
+                options.StorageAuthorityId = Guid.Parse("60fbd778-c089-462b-b74b-bb74811882a7");
                 options.PhysicallyDeleteRequestedAssets = true;
                 options.PhysicallyDeleteExpiredAssets = true;
                 options.AddBinding<OrderAssets>();
@@ -42,6 +45,7 @@ public static class Program
             var storageProvider = scope.ServiceProvider.GetRequiredService<InMemoryMinioLikeObjectStorageProvider>();
             var osaDbContext = scope.ServiceProvider.GetRequiredService<ObjectStorageAssetDbContext>();
             await osaDbContext.Database.MigrateAsync().ConfigureAwait(false);
+            foreach (var hosted in rootProvider.GetServices<IHostedService>()) await hosted.StartAsync(default);
             await CreateOrdersTableAsync(osaDbContext).ConfigureAwait(false);
 
             await using var hostDbContext = CreateHostDbContext(settings.ConnectionString);
@@ -51,6 +55,8 @@ public static class Program
             var contentReader = scope.ServiceProvider.GetRequiredService<IObjectAssetContentReader>();
             var maintenanceService = scope.ServiceProvider.GetRequiredService<IObjectAssetMaintenanceService>();
             var bindingCatalog = scope.ServiceProvider.GetRequiredService<IObjectAssetBindingCatalog>();
+
+            await VerifyEnhancedWorkflowAsync(scope.ServiceProvider, rootProvider, hostDbContext);
 
             var order = new Order
             {
@@ -287,8 +293,15 @@ public static class Program
         string DatabaseName,
         string BucketName)
     {
-        public string ConnectionString =>
-            $"Server={SqlServer};Database={DatabaseName};User ID={SqlUser};Password={SqlPassword};TrustServerCertificate=True;";
+        public string ConnectionString => new SqlConnectionStringBuilder
+        {
+            DataSource = SqlServer,
+            InitialCatalog = DatabaseName,
+            TrustServerCertificate = true,
+            IntegratedSecurity = string.Equals(ReadSetting("OSA_INMEMORY_E2E_SQL_INTEGRATED_SECURITY", "OSA_E2E_SQL_INTEGRATED_SECURITY"), "true", StringComparison.OrdinalIgnoreCase),
+            UserID = string.Equals(ReadSetting("OSA_INMEMORY_E2E_SQL_INTEGRATED_SECURITY", "OSA_E2E_SQL_INTEGRATED_SECURITY"), "true", StringComparison.OrdinalIgnoreCase) ? "" : SqlUser,
+            Password = string.Equals(ReadSetting("OSA_INMEMORY_E2E_SQL_INTEGRATED_SECURITY", "OSA_E2E_SQL_INTEGRATED_SECURITY"), "true", StringComparison.OrdinalIgnoreCase) ? "" : SqlPassword
+        }.ConnectionString;
 
         public static InMemoryE2ESettings FromEnvironment()
         {

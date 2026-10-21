@@ -36,10 +36,12 @@ public sealed class PersistenceTests
     public void ObjectStorageAssetDbContext_ShouldApplyConfiguredSchema()
     {
         var context = CreateContext("osa_test");
-        var entityType = context.Model.FindEntityType(typeof(ObjectAsset));
+        var entityType = context.Model.FindEntityType(typeof(PermanentObjectAsset));
 
         entityType.Should().NotBeNull();
         entityType!.GetSchema().Should().Be("osa_test");
+        context.Model.FindEntityType(typeof(TemporaryObjectAsset))!.GetTableName().Should().Be("ObjectAssetTemporary");
+        context.Model.FindEntityType(typeof(ArchivedObjectAsset))!.GetTableName().Should().Be("ObjectAssetArchive");
     }
 
     [Test]

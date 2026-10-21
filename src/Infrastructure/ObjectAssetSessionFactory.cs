@@ -5,7 +5,8 @@ namespace Elf.ObjectStorageAsset.Infrastructure;
 
 internal sealed class ObjectAssetSessionFactory(
     IObjectAssetBindingCatalog bindingCatalog,
-    ObjectAssetCommandBuffer commandBuffer)
+    ObjectAssetCommandBuffer commandBuffer,
+    ObjectAssetStager stager)
     : IObjectAssetSessionFactory
 {
     private readonly IObjectAssetBindingCatalog _bindingCatalog = bindingCatalog;
@@ -16,13 +17,14 @@ internal sealed class ObjectAssetSessionFactory(
         ArgumentNullException.ThrowIfNull(owner);
 
         var ownerDefinition = _bindingCatalog.GetOwner(typeof(T));
-        return new ObjectAssetSession<T>(owner, ownerDefinition, _commandBuffer);
+        return new ObjectAssetSession<T>(owner, ownerDefinition, _commandBuffer, stager);
     }
 
     private sealed class ObjectAssetSession<T>(
         T owner,
         ObjectAssetOwnerDefinition ownerDefinition,
-        ObjectAssetCommandBuffer commandBuffer)
+        ObjectAssetCommandBuffer commandBuffer,
+        ObjectAssetStager stager)
         : IObjectAssetSession<T>
     {
         private readonly T _owner = owner;
@@ -45,7 +47,7 @@ internal sealed class ObjectAssetSessionFactory(
                     $"Slot '{slot.Name}' does not allow SetSingleAsync because it is configured as '{slotDefinition.Multiplicity}'.");
             }
 
-            var bufferedContent = await ObjectAssetBufferedContent.CreateAsync(
+            var bufferedContent = await stager.StageAsync(
                     content,
                     fileName,
                     contentType,
@@ -77,7 +79,7 @@ internal sealed class ObjectAssetSessionFactory(
                     $"Slot '{slot.Name}' does not allow AddAsync because it is configured as '{slotDefinition.Multiplicity}'.");
             }
 
-            var bufferedContent = await ObjectAssetBufferedContent.CreateAsync(
+            var bufferedContent = await stager.StageAsync(
                     content,
                     fileName,
                     contentType,

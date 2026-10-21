@@ -7,7 +7,7 @@ namespace Elf.ObjectStorageAsset.Minio;
 /// <summary>
 /// MinIO-backed implementation of the generic object storage provider.
 /// </summary>
-public sealed class MinioObjectStorageProvider : IObjectStorageProvider
+public sealed class MinioObjectStorageProvider : IObjectStorageProvider, IObjectStorageCopyProvider
 {
     private readonly IMinioClient _client;
     private readonly MinioObjectStorageOptions _options;
@@ -63,23 +63,47 @@ public sealed class MinioObjectStorageProvider : IObjectStorageProvider
             getObjectArgs = getObjectArgs.WithVersionId(request.VersionId);
         }
 
-        var buffer = new MemoryStream();
-        var stat = await _client.GetObjectAsync(
-                getObjectArgs.WithCallbackStream(stream => stream.CopyTo(buffer)),
-                cancellationToken)
-            .ConfigureAwait(false);
-        buffer.Position = 0;
+        var buffer = new FileStream(Path.Combine(Path.GetTempPath(), $"osa-minio-{Guid.NewGuid():N}.tmp"),
+            FileMode.CreateNew, FileAccess.ReadWrite, FileShare.None, 65536, FileOptions.Asynchronous | FileOptions.DeleteOnClose);
+        try
+        {
+            var stat = await _client.GetObjectAsync(
+                    getObjectArgs.WithCallbackStream(stream => stream.CopyTo(buffer)),
+                    cancellationToken)
+                .ConfigureAwait(false);
+            buffer.Position = 0;
 
-        return new ObjectStorageGetResult
+            return new ObjectStorageGetResult
+            {
+                BucketName = request.BucketName,
+                ObjectKey = request.ObjectKey,
+                Content = buffer,
+                ContentType = string.IsNullOrWhiteSpace(stat.ContentType)
+                    ? "application/octet-stream"
+                    : stat.ContentType,
+                ETag = stat.ETag,
+                VersionId = stat.VersionId ?? request.VersionId
+            };
+        }
+        catch { await buffer.DisposeAsync(); throw; }
+    }
+
+    public async Task<ObjectStorageStatResult> CopyToAsync(ObjectStorageGetRequest request, Stream destination, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        ArgumentNullException.ThrowIfNull(destination);
+        var args = new GetObjectArgs().WithBucket(request.BucketName).WithObject(request.ObjectKey);
+        if (!string.IsNullOrWhiteSpace(request.VersionId)) args = args.WithVersionId(request.VersionId);
+        var stat = await _client.GetObjectAsync(args.WithCallbackStream((stream, ct) => stream.CopyToAsync(destination, ct)), cancellationToken).ConfigureAwait(false);
+        return new ObjectStorageStatResult
         {
             BucketName = request.BucketName,
             ObjectKey = request.ObjectKey,
-            Content = buffer,
-            ContentType = string.IsNullOrWhiteSpace(stat.ContentType)
-                ? "application/octet-stream"
-                : stat.ContentType,
+            SizeBytes = stat.Size,
+            ContentType = stat.ContentType,
             ETag = stat.ETag,
-            VersionId = request.VersionId
+            VersionId = stat.VersionId ?? request.VersionId,
+            LastModifiedAtUtc = stat.LastModified
         };
     }
 
@@ -108,7 +132,7 @@ public sealed class MinioObjectStorageProvider : IObjectStorageProvider
                 SizeBytes = stat.Size,
                 ContentType = stat.ContentType,
                 ETag = stat.ETag,
-                VersionId = request.VersionId,
+                VersionId = stat.VersionId ?? request.VersionId,
                 LastModifiedAtUtc = stat.LastModified
             };
         }

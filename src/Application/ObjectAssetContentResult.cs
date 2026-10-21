@@ -5,6 +5,7 @@ namespace Elf.ObjectStorageAsset.Application;
 /// </summary>
 public sealed class ObjectAssetContentResult
 {
+    public ObjectAssetIntegrityResult? Integrity { get; init; }
     public required Guid AssetId { get; init; }
 
     public required string FileName { get; init; }

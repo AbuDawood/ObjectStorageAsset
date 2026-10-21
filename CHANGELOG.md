@@ -2,7 +2,35 @@
 
 All notable changes to this project are documented in this file.
 
-## Unreleased
+## 0.2.0
+
+### Added
+- Separate permanent, temporary and archive payload tables with stable asset identities and explicit binding kinds.
+- Paged owner/temporary/external/archive retrieval and resumable reconciliation of registered assets.
+- V3 ownership exchange with immutable origin, storage authority mappings and explicit v2 peer adaptation.
+- Configurable versioned naming templates with typed placeholders and preserved staging-time keys.
+- Persisted SHA-256 verification evidence (`NotChecked` by default), Warning/Guard policies and opt-in read/upload triggers.
+- Bounded memory/disk staging and optional provider copy-to-stream support.
+- Single designated-pod maintenance with a SQL session lock, isolated sequential tasks, task intervals and bounded retries.
+- Real SQL concurrency/integrity/lifecycle coverage, v0.1.6 binary compatibility checks and a configurable SQL scale scenario.
+- Release pipeline gates packaging on unit/SQL, old-binary compatibility and real MinIO E2E validation.
+
+### Changed
+- Owner summaries use SQL counts and compact projections; registry import and maintenance use bounded batches.
+- Existing naming and descriptor v2 defaults remain available; registered external assets remain permanent.
+- Existing databases require an explicit staged EF upgrade and host FK retargeting when applicable.
+- Release tags must match the package version and identify a commit already merged into `main`; assemblies and packages use the same version.
+
+### Upgrade
+- EF-generated schema migrations include guarded, resumable v0.1.6 data splitting and conservation validation.
+- Preserve temporary bindings without expiry; require host FK retargeting before moving referenced payloads.
+- Persist physical-delete intent for retries; retain legacy content when the historical decision is ambiguous and policies differ.
+- Block destructive downgrade with reserved/moved data; use a verified pre-upgrade backup for recovery.
+
+## 0.1.6
+
+### Fixed
+- Reject finalization of expired temporary bindings. This guard is retained by the lifecycle enhancements.
 
 ## 0.1.5 - 2026-03-11
 

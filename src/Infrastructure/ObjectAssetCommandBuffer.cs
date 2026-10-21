@@ -2,7 +2,7 @@ using Elf.ObjectStorageAsset.Application;
 
 namespace Elf.ObjectStorageAsset.Infrastructure;
 
-internal sealed class ObjectAssetCommandBuffer
+internal sealed class ObjectAssetCommandBuffer : IDisposable
 {
     private readonly List<IObjectAssetCommand> _commands = [];
 
@@ -17,6 +17,16 @@ internal sealed class ObjectAssetCommandBuffer
         var drained = _commands.ToArray();
         _commands.Clear();
         return drained;
+    }
+
+    public void Dispose()
+    {
+        foreach (var command in Drain())
+            switch (command)
+            {
+                case SetSingleObjectAssetCommand set: set.Content.Content.Dispose(); break;
+                case AddObjectAssetCommand add: add.Content.Content.Dispose(); break;
+            }
     }
 }
 
