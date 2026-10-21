@@ -112,17 +112,40 @@ jobs:
       - name: In-memory provider E2E with real SQL
         run: dotnet run --project test/InMemoryE2E --configuration ${{ env.CONFIGURATION }} --no-build --no-restore
 
+      - name: Checkout pinned MinIO source
+        uses: actions/checkout@v4
+        with:
+          repository: minio/minio
+          # RELEASE.2024-10-13T13-34-11Z; do not depend on retired binary/image endpoints.
+          ref: d10bb7e1b667c2df72c394ef1fa52ab4a6802d0f
+          path: artifacts/minio-source
+          persist-credentials: false
+
+      - name: Setup Go for the test provider
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.24.9'
+          cache-dependency-path: artifacts/minio-source/go.sum
+
+      - name: Build pinned MinIO test provider
+        working-directory: artifacts/minio-source
+        env:
+          CGO_ENABLED: '0'
+        run: go build -trimpath -o ../minio .
+
       - name: Start disposable MinIO
+        env:
+          MINIO_ROOT_USER: osa-ci
+          MINIO_ROOT_PASSWORD: osa-ci-only-password
         shell: bash
         run: |
-          docker run --detach --name osa-ci-minio --publish 127.0.0.1:9000:9000 \
-            --env MINIO_ROOT_USER=osa-ci --env MINIO_ROOT_PASSWORD=osa-ci-only-password \
-            minio/minio:RELEASE.2024-10-13T13-34-11Z server /data --address :9000
+          nohup ./artifacts/minio server ./artifacts/minio-data --address 127.0.0.1:9000 > artifacts/minio.log 2>&1 &
+          echo "$!" > artifacts/minio.pid
           for attempt in {1..30}; do
             if curl --fail --silent http://127.0.0.1:9000/minio/health/ready; then exit 0; fi
             sleep 2
           done
-          docker logs --tail 80 osa-ci-minio
+          tail -n 80 artifacts/minio.log
           exit 1
 
       - name: Real MinIO E2E with real SQL
@@ -168,4 +191,8 @@ jobs:
 
       - name: Stop disposable MinIO
         if: always()
-        run: docker rm --force osa-ci-minio 2>/dev/null || true
+        shell: bash
+        run: |
+          if [[ -f artifacts/minio.pid ]]; then
+            kill "$(cat artifacts/minio.pid)" 2>/dev/null || true
+          fi

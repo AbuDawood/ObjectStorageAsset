@@ -56,7 +56,9 @@ NuGet packages are produced only from the projects under `src/`:
 The GitHub Actions workflow at `.github/workflows/nuget.yml` runs unit and SQL integration tests,
 actual v0.1.6 binary compatibility checks, and both the in-memory-provider and real MinIO E2E runners
 against disposable local SQL Server databases. The opt-in million-row scale test remains a separate
-manual validation. Only after these checks pass does the workflow build and pack
+manual validation. CI builds the MinIO test server from the pinned official source release
+`RELEASE.2024-10-13T13-34-11Z`, rather than relying on retired binary/container download endpoints.
+Only after these checks pass does the workflow build and pack
 `ObjectStorageAsset.Pack.slnf`, using one version for assemblies, packages and internal dependencies.
 It checks all six package/symbol pairs and embeds this README and the license in every package.
 

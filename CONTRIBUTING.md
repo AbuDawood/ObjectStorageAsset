@@ -177,7 +177,8 @@ testing; point it at a build of tag `v0.1.6` (`2d323d419c1d3e380a36efb0d88685eb4
 ## Release validation
 
 The NuGet workflow gates all six packages on the non-scale unit/SQL suite, pinned v0.1.6 binary
-interop, and both E2E runners, using disposable SQL Server and MinIO containers on the runner.
+interop, and both E2E runners, using a disposable SQL Server container and a MinIO process built
+from pinned official source on the runner.
 Run the opt-in scale scenario separately before a lifecycle/performance release. Never substitute
 a shared SQL Server or object-storage environment for the workflow's local containers.
 
