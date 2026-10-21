@@ -2,6 +2,12 @@ using Elf.ObjectStorageAsset.Domain.Enums;
 
 namespace Elf.ObjectStorageAsset.Application;
 
+/// <summary>Stable reference target for host foreign keys across asset lifecycle tables.</summary>
+public sealed class ObjectAssetIdentityQueryModel
+{
+    public Guid AssetId { get; set; }
+}
+
 /// <summary>
 /// Read-only query model mapped by host DbContexts to the ObjectAssets table.
 /// </summary>
@@ -12,6 +18,7 @@ public sealed class ObjectAssetQueryModel
     public string OwnerType { get; set; } = string.Empty;
 
     public ObjectAssetOwnerKeyKind OwnerKeyKind { get; set; }
+    public ObjectAssetBindingKind BindingKind { get; set; }
 
     public long? OwnerKeyInt64 { get; set; }
 

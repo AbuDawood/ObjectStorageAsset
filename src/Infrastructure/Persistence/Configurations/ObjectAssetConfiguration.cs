@@ -9,7 +9,7 @@ internal sealed class ObjectAssetConfiguration : IEntityTypeConfiguration<Object
 {
     public void Configure(EntityTypeBuilder<ObjectAsset> builder)
     {
-        builder.ToTable("ObjectAssets");
+        builder.UseTpcMappingStrategy();
         builder.HasKey(x => x.Id);
 
         builder.Property(x => x.OwnerType)
@@ -90,8 +90,36 @@ internal sealed class ObjectAssetConfiguration : IEntityTypeConfiguration<Object
         builder.Property(x => x.RowVersion)
             .IsRowVersion();
 
-        builder.HasIndex(x => x.ObjectKey)
-            .IsUnique();
+        builder.Property(x => x.Id).ValueGeneratedNever();
+        builder.Property(x => x.BindingKind).HasDefaultValue(ObjectAssetBindingKind.LegacyUnresolved);
+        builder.Property(x => x.Sha256ValidationStatus).HasDefaultValue(Sha256ValidationStatus.NotChecked);
+        builder.Property(x => x.ExternalOwnerType).HasMaxLength(128);
+        builder.Property(x => x.ExternalOwnerKey).HasMaxLength(256);
+        builder.Property(x => x.NamingProfileId).HasMaxLength(128);
+        builder.Property(x => x.NamingDefinitionHash).HasMaxLength(64);
+        builder.Property(x => x.Sha256ValidationActualHash).HasMaxLength(64);
+        builder.Property(x => x.Sha256ValidationObjectVersion).HasMaxLength(128);
+        builder.Property(x => x.Sha256ValidationError).HasMaxLength(1024);
+        builder.HasIndex(x => new { x.Status, x.NextDeleteAttemptAtUtc, x.DeleteRetrySuspended });
+        builder.HasIndex(x => new { x.Status, x.LastStatusChangedAtUtc, x.Id });
+        builder.HasIndex(x => new { x.CreatedAtUtc, x.Id });
+        builder.HasIndex(x => new { x.TemporaryBindingId, x.Status, x.CreatedAtUtc, x.Id });
+        builder.HasIndex(x => new
+        {
+            x.ExternalOwnerInstanceId,
+            x.ExternalOwnerType,
+            x.ExternalOwnerKeyKind,
+            x.ExternalOwnerKey,
+            x.Status,
+            x.CreatedAtUtc,
+            x.Id
+        }).HasFilter("[BindingKind]=2 AND [Status]=2");
+        builder.HasIndex(x => new { x.OwnerType, x.SlotName, x.OwnerKeyGuid, x.Status, x.CreatedAtUtc, x.Id })
+            .IncludeProperties(x => new { x.BindingKind, x.OwnerKeyKind });
+        builder.HasIndex(x => new { x.OwnerType, x.SlotName, x.OwnerKeyText, x.Status, x.CreatedAtUtc, x.Id })
+            .IncludeProperties(x => new { x.BindingKind, x.OwnerKeyKind });
+        builder.HasIndex(x => new { x.OwnerType, x.SlotName, x.OwnerKeyInt64, x.Status, x.CreatedAtUtc, x.Id })
+            .IncludeProperties(x => new { x.BindingKind, x.OwnerKeyKind });
 
         builder.HasIndex(x => new
         {

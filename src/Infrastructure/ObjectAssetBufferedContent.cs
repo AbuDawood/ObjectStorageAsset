@@ -1,10 +1,14 @@
-using System.Security.Cryptography;
+using Elf.ObjectStorageAsset.Application;
 
 namespace Elf.ObjectStorageAsset.Infrastructure;
 
-internal sealed class ObjectAssetBufferedContent
+internal sealed class ObjectAssetBufferedContent : IAsyncDisposable
 {
-    public required byte[] Bytes { get; init; }
+    public required Stream Content { get; init; }
+    public Guid AssetId { get; init; }
+    public DateTimeOffset CreatedAtUtc { get; init; }
+    public required string ObjectKey { get; init; }
+    public ObjectKeyNamingProfile? NamingProfile { get; init; }
 
     public required string FileName { get; init; }
 
@@ -22,41 +26,5 @@ internal sealed class ObjectAssetBufferedContent
 
     public required string MetadataJson { get; init; }
 
-    public static async Task<ObjectAssetBufferedContent> CreateAsync(
-        Stream content,
-        string fileName,
-        string? contentType,
-        DateTimeOffset? expiresAtUtc,
-        IReadOnlyDictionary<string, string>? metadata,
-        CancellationToken cancellationToken)
-    {
-        ArgumentNullException.ThrowIfNull(content);
-
-        if (string.IsNullOrWhiteSpace(fileName))
-        {
-            throw new InvalidOperationException("Object asset staging requires a file name.");
-        }
-
-        using var buffer = new MemoryStream();
-        await content.CopyToAsync(buffer, cancellationToken).ConfigureAwait(false);
-
-        var bytes = buffer.ToArray();
-        var sha256 = Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant();
-        var normalizedMetadata = ObjectAssetMetadataBagSerializer.Normalize(metadata);
-
-        return new ObjectAssetBufferedContent
-        {
-            Bytes = bytes,
-            FileName = fileName.Trim(),
-            Extension = Path.GetExtension(fileName)?.Trim() ?? string.Empty,
-            ContentType = string.IsNullOrWhiteSpace(contentType)
-                ? "application/octet-stream"
-                : contentType.Trim(),
-            SizeBytes = bytes.LongLength,
-            Sha256 = sha256,
-            ExpiresAtUtc = expiresAtUtc,
-            Metadata = normalizedMetadata,
-            MetadataJson = ObjectAssetMetadataBagSerializer.Serialize(normalizedMetadata)
-        };
-    }
+    public async ValueTask DisposeAsync() => await Content.DisposeAsync();
 }

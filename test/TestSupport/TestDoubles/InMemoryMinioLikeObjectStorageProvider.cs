@@ -1,4 +1,5 @@
 using System.Security.Cryptography;
+using System.Collections.Concurrent;
 using Elf.ObjectStorageAsset.Application;
 
 namespace Elf.ObjectStorageAsset.TestSupport.TestDoubles;
@@ -8,11 +9,13 @@ namespace Elf.ObjectStorageAsset.TestSupport.TestDoubles;
 /// </summary>
 public sealed class InMemoryMinioLikeObjectStorageProvider : IObjectStorageProvider
 {
-    private readonly Dictionary<string, StoredObject> _objects = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, StoredObject> _objects = new(StringComparer.Ordinal);
 
     public bool ThrowOnPut { get; set; }
 
     public bool ThrowOnDelete { get; set; }
+    public bool ThrowOnGet { get; set; }
+    public bool CorruptOnGet { get; set; }
 
     public IReadOnlyCollection<string> ObjectKeys => _objects.Values.Select(x => x.ObjectKey).ToArray();
 
@@ -27,7 +30,7 @@ public sealed class InMemoryMinioLikeObjectStorageProvider : IObjectStorageProvi
             x => string.Equals(_objects[x].ObjectKey, objectKey, StringComparison.Ordinal));
         if (key is not null)
         {
-            _objects.Remove(key);
+            _objects.TryRemove(key, out _);
         }
     }
 
@@ -69,17 +72,24 @@ public sealed class InMemoryMinioLikeObjectStorageProvider : IObjectStorageProvi
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(request);
+        if (ThrowOnGet) throw new IOException("Injected read failure");
 
         if (!_objects.TryGetValue(BuildCompositeKey(request.BucketName, request.ObjectKey), out var storedObject))
         {
             throw new InvalidOperationException("object not found");
         }
 
+        var contentBytes = storedObject.Bytes;
+        if (CorruptOnGet)
+        {
+            contentBytes = contentBytes.ToArray();
+            if (contentBytes.Length > 0) contentBytes[0] ^= 0xff;
+        }
         return Task.FromResult(new ObjectStorageGetResult
         {
             BucketName = storedObject.BucketName,
             ObjectKey = storedObject.ObjectKey,
-            Content = new MemoryStream(storedObject.Bytes, writable: false),
+            Content = new MemoryStream(contentBytes, writable: false),
             ContentType = storedObject.ContentType,
             ETag = storedObject.ETag,
             VersionId = request.VersionId
@@ -120,7 +130,7 @@ public sealed class InMemoryMinioLikeObjectStorageProvider : IObjectStorageProvi
             throw new InvalidOperationException("delete failed");
         }
 
-        _objects.Remove(BuildCompositeKey(request.BucketName, request.ObjectKey));
+        _objects.TryRemove(BuildCompositeKey(request.BucketName, request.ObjectKey), out _);
         return Task.CompletedTask;
     }
 

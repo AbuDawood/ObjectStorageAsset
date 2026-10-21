@@ -129,3 +129,61 @@ For every slice:
   - `osa-sha256`
 - MinIO registration must validate endpoint, bucket name, access key, and secret key before runtime resolution.
 - MinIO-specific tests should mock `IMinioClient`; do not require a live MinIO server for unit coverage.
+
+## 13) Lifecycle Split and Integrity
+
+- Keep payloads in exactly one lifecycle table; reserve ids/physical locators in `ObjectAssetIdentity`.
+- Use identity-first lookup/locking for single-asset lifecycle transitions. Retain rowversion guards,
+  including the v0.1.6 prohibition on expired temporary finalization.
+- Owner list queries target permanent local-owner rows. Use SQL counts/compact projections and
+  bounded keyset pages; do not materialize every attachment to calculate a count.
+- External ownership, immutable origin, storage authority and deletion rights are separate concepts.
+  Missing v2 provenance must remain unresolved, never invented or treated as temporary.
+- Keep v2 descriptors unchanged. New exchange fields belong in the explicit v3 contract, with old
+  binary interoperability coverage. Known origin/naming information cannot be overwritten on return.
+- Expected SHA-256 is immutable. Upload hashing does not mean stored bytes were verified.
+  Validation defaults to `NotChecked`; Warning is the default policy. Guard must commit failed
+  evidence independently before rejecting access and must expose no unverified bytes.
+- Persist resolved naming at staging time. Published profile id/version definitions are immutable.
+  Never recompute old or temporary asset keys after a configuration change.
+- Stage large content in bounded chunks with spill-to-disk, aggregate quotas and deterministic cleanup.
+  An optional provider copy operation returns metadata for the bytes actually copied.
+- Maintenance runs in one designated pod using the shared SQL session application lock. Tasks are
+  sequential and isolated; database records are processed in bounded batches with provider concurrency.
+  Keep backoff and maximum attempts; do not retry a newly failed record again in the same cycle.
+- Generate EF schema migrations/snapshots with EF CLI. Data moves need verified source columns,
+  resumable committed batches, conservation checks, custom-schema escaping and explicit rollback guards.
+  Keep a pause point after identity reservation so host FKs can move before source-row deletion.
+- Keep upgrade, interruption/recovery and real-provider E2E tests passing before shipping lifecycle
+  changes. Never alter published migration ids or auto-run a large split on application startup.
+
+Additional local validation:
+
+```powershell
+$env:OSA_TEST_SQL_SERVER = '(localdb)\MSSQLLocalDB'
+$env:OSA_TEST_SQL_INTEGRATED_SECURITY = 'true'
+dotnet test test/UnitTests --filter 'FullyQualifiedName~WorkflowTests'
+$env:OSA_INMEMORY_E2E_SQL_SERVER = '(localdb)\MSSQLLocalDB'
+$env:OSA_INMEMORY_E2E_SQL_INTEGRATED_SECURITY = 'true'
+dotnet run --project test/InMemoryE2E
+$env:OSA_SCALE_MAIN_ROWS = '1000000'
+dotnet test test/UnitTests --filter 'FullyQualifiedName~LargeDataset'
+```
+
+These scenarios create and delete uniquely named disposable databases. Do not point them at an
+existing host database. `OSA_V016_ASSEMBLY_DIRECTORY` enables actual old-binary v2/v3 compatibility
+testing; point it at a build of tag `v0.1.6` (`2d323d419c1d3e380a36efb0d88685eb46c09b5b`).
+
+## Release validation
+
+The NuGet workflow gates all six packages on the non-scale unit/SQL suite, pinned v0.1.6 binary
+interop, and both E2E runners, using disposable SQL Server and MinIO containers on the runner.
+Run the opt-in scale scenario separately before a lifecycle/performance release. Never substitute
+a shared SQL Server or object-storage environment for the workflow's local containers.
+
+Set `VersionPrefix` and the changelog together. Build and pack with the same `/p:Version` value;
+validate the output using `.github/scripts/Test-Packages.ps1 -PackageDirectory artifacts/nuget
+-Version <version>`. Merge through a PR, then create a matching new `v<VersionPrefix>` tag on `main`.
+Only a tag push publishes; PRs and manual workflow runs only upload artifacts. NuGet publication
+can partially succeed across packages; the workflow supports retrying the same immutable artifacts
+with `--skip-duplicate`, while corrections require a new release version.

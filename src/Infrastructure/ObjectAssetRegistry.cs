@@ -6,8 +6,9 @@ using Elf.ObjectStorageAsset.Infrastructure.Persistence;
 
 namespace Elf.ObjectStorageAsset.Infrastructure;
 
-internal sealed class ObjectAssetRegistry(ObjectStorageAssetDbContext objectStorageAssetDbContext)
-    : IObjectAssetRegistry
+internal sealed partial class ObjectAssetRegistry(ObjectStorageAssetDbContext objectStorageAssetDbContext,
+    ObjectStorageAssetRuntimeOptions options, ObjectAssetStorageResolver storageResolver)
+    : IObjectAssetRegistry, IObjectAssetExchangeRegistry
 {
     private readonly ObjectStorageAssetDbContext _objectStorageAssetDbContext = objectStorageAssetDbContext;
 
@@ -20,7 +21,7 @@ internal sealed class ObjectAssetRegistry(ObjectStorageAssetDbContext objectStor
             throw new InvalidOperationException("Asset descriptor reads require a non-empty asset id.");
         }
 
-        var asset = await _objectStorageAssetDbContext.ObjectAssets
+        var asset = await _objectStorageAssetDbContext.PermanentAssets
             .AsNoTracking()
             .FirstOrDefaultAsync(
                 x => x.Id == assetId
@@ -49,7 +50,7 @@ internal sealed class ObjectAssetRegistry(ObjectStorageAssetDbContext objectStor
             return new Dictionary<Guid, ObjectAssetDescriptor>();
         }
 
-        var assets = await _objectStorageAssetDbContext.ObjectAssets
+        var assets = await _objectStorageAssetDbContext.PermanentAssets
             .AsNoTracking()
             .Where(x => x.Status == ObjectAssetStatus.Active
                         && x.TemporaryBindingId == null
@@ -80,9 +81,45 @@ internal sealed class ObjectAssetRegistry(ObjectStorageAssetDbContext objectStor
         }
 
         var results = new List<ObjectAssetDescriptorRegistrationResult>(requests.Count);
-        foreach (var request in requests)
+        foreach (var batch in requests.Chunk(options.Maintenance.BatchSize))
         {
-            results.Add(await RegisterDescriptorCoreAsync(request, cancellationToken).ConfigureAwait(false));
+            foreach (var request in batch) ValidateDescriptor(request.Descriptor);
+            var ids = batch.Select(x => x.Descriptor.AssetId).Distinct().ToArray();
+            var known = await _objectStorageAssetDbContext.ObjectAssets.Where(x => ids.Contains(x.Id))
+                .ToDictionaryAsync(x => x.Id, cancellationToken);
+            foreach (var request in batch)
+            {
+                if (!known.TryGetValue(request.Descriptor.AssetId, out var asset))
+                {
+                    var d = request.Descriptor;
+                    asset = ObjectAsset.CreateRegisteredDescriptor(d.AssetId, d.Bucket, d.ObjectKey, d.FileName, d.ContentType,
+                        d.Length, d.Hash, d.CreatedAtUtc, null, request.OwnershipMode, ObjectAssetMetadataBagSerializer.Serialize(d.Metadata));
+                    _objectStorageAssetDbContext.ObjectAssets.Add(asset);
+                    known[asset.Id] = asset;
+                    results.Add(new()
+                    {
+                        AssetId = asset.Id,
+                        OwnershipMode = asset.OwnershipMode,
+                        Descriptor = MapDescriptor(asset),
+                        Outcome = ObjectAssetDescriptorRegistrationOutcome.Added
+                    });
+                }
+                else
+                {
+                    var descriptor = MapDescriptor(asset);
+                    var conflicts = DetectConflicts(asset, descriptor, request);
+                    results.Add(new()
+                    {
+                        AssetId = asset.Id,
+                        OwnershipMode = asset.OwnershipMode,
+                        Descriptor = descriptor,
+                        Outcome = conflicts.Count == 0 ? ObjectAssetDescriptorRegistrationOutcome.IgnoredIdentical : ObjectAssetDescriptorRegistrationOutcome.RejectedConflict,
+                        ConflictFields = conflicts,
+                        ConflictMessage = conflicts.Count == 0 ? null : "Descriptor registration conflicted."
+                    });
+                }
+            }
+            await _objectStorageAssetDbContext.SaveChangesAsync(cancellationToken);
         }
 
         return results;
@@ -94,8 +131,8 @@ internal sealed class ObjectAssetRegistry(ObjectStorageAssetDbContext objectStor
     {
         ValidateDescriptor(request.Descriptor);
 
-        var existingAsset = await _objectStorageAssetDbContext.ObjectAssets
-            .FindAsync([request.Descriptor.AssetId], cancellationToken)
+        var existingAsset = await _objectStorageAssetDbContext
+            .FindAssetAsync(request.Descriptor.AssetId, true, cancellationToken)
             .ConfigureAwait(false);
 
         if (existingAsset is null)
@@ -177,7 +214,7 @@ internal sealed class ObjectAssetRegistry(ObjectStorageAssetDbContext objectStor
             conflicts.Add(nameof(ObjectAssetDescriptor.Length));
         }
 
-        if (!string.Equals(existingDescriptor.Hash, NormalizeString(descriptor.Hash), StringComparison.Ordinal))
+        if (!HashesEqual(existingDescriptor.Hash, NormalizeString(descriptor.Hash)))
         {
             conflicts.Add(nameof(ObjectAssetDescriptor.Hash));
         }
@@ -278,6 +315,10 @@ internal sealed class ObjectAssetRegistry(ObjectStorageAssetDbContext objectStor
             ? string.Empty
             : value.Trim();
     }
+
+    private static bool HashesEqual(string left, string right) => string.Equals(left, right,
+        left.Length == 64 && right.Length == 64 && left.All(Uri.IsHexDigit) && right.All(Uri.IsHexDigit)
+            ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal);
 
     private static bool AreMetadataEqual(
         IReadOnlyDictionary<string, string> left,

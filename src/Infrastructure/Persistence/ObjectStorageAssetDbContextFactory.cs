@@ -15,9 +15,15 @@ public sealed class ObjectStorageAssetDbContextFactory
         var optionsBuilder = new DbContextOptionsBuilder<ObjectStorageAssetDbContext>();
         optionsBuilder.UseSqlServer(
             connectionString,
-            sql => sql.MigrationsHistoryTable(
-                ObjectStorageAssetDbContext.MigrationsHistoryTableName,
-                schema));
+            sql =>
+            {
+                sql.MigrationsHistoryTable(ObjectStorageAssetDbContext.MigrationsHistoryTableName, schema);
+                var index = Array.FindIndex(args, x => string.Equals(x, "--command-timeout", StringComparison.OrdinalIgnoreCase));
+                var seconds = 600;
+                if (index >= 0 && (index == args.Length - 1 || !int.TryParse(args[index + 1], out seconds) || seconds < 1))
+                    throw new ArgumentException("--command-timeout requires a positive number of seconds.");
+                sql.CommandTimeout(seconds);
+            });
 
         return new ObjectStorageAssetDbContext(
             optionsBuilder.Options,

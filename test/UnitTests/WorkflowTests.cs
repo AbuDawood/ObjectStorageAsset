@@ -13,7 +13,7 @@ using Elf.ObjectStorageAsset.TestSupport.TestDoubles;
 namespace Elf.ObjectStorageAsset.UnitTests;
 
 [TestFixture]
-public sealed class WorkflowTests
+public sealed partial class WorkflowTests
 {
     [Test]
     public async Task SaveChangesWithAssetsAsync_ShouldPersistAndReadSingleAsset()
@@ -711,6 +711,10 @@ public sealed class WorkflowTests
         report.DeleteFailedAssetIds.Should().Contain(deleteAsset.Id);
 
         fixture.StorageProvider.ThrowOnDelete = false;
+        (await maintenanceService.RetryDeleteFailuresAsync()).Should().Be(0, "retry backoff must be respected");
+        await osaDbContext.PermanentAssets.Where(x => x.Id == deleteAsset.Id)
+            .ExecuteUpdateAsync(set => set.SetProperty(x => x.NextDeleteAttemptAtUtc, DateTimeOffset.UtcNow.AddMinutes(-1)));
+        osaDbContext.ChangeTracker.Clear();
         var retriedCount = await maintenanceService.RetryDeleteFailuresAsync();
         retriedCount.Should().Be(1);
 
@@ -776,20 +780,26 @@ public sealed class WorkflowTests
 
         public static async Task<SqlServerFixture> CreateAsync(
             bool physicallyDeleteRequestedAssets = true,
-            bool physicallyDeleteExpiredAssets = true)
+            bool physicallyDeleteExpiredAssets = true,
+            Action<ObjectStorageAssetOptions>? configure = null,
+            string schema = "osa",
+            bool useMigrations = false,
+            InMemoryMinioLikeObjectStorageProvider? sharedStorage = null,
+            string? targetMigration = null)
         {
             var databaseName = $"ObjectStorageAssetWorkflow_{Guid.NewGuid():N}";
             var connectionString = BuildConnectionString(databaseName);
-            var storageProvider = new InMemoryMinioLikeObjectStorageProvider();
+            var storageProvider = sharedStorage ?? new InMemoryMinioLikeObjectStorageProvider();
             var services = new ServiceCollection();
             services.AddObjectStorageAsset(options =>
             {
                 options.ConnectionString = connectionString;
-                options.Schema = "osa";
+                options.Schema = schema;
                 options.DefaultStorageNamespace = "unit-tests";
                 options.PhysicallyDeleteRequestedAssets = physicallyDeleteRequestedAssets;
                 options.PhysicallyDeleteExpiredAssets = physicallyDeleteExpiredAssets;
                 options.AddBinding<OrderAssets>();
+                configure?.Invoke(options);
             });
 
             services.RemoveAll<DbContextOptions<ObjectStorageAssetDbContext>>();
@@ -799,7 +809,7 @@ public sealed class WorkflowTests
                     connectionString,
                     sql => sql.MigrationsHistoryTable(
                         ObjectStorageAssetDbContext.MigrationsHistoryTableName,
-                        "osa")));
+                        schema)));
             services.AddSingleton<IObjectStorageProvider>(storageProvider);
             services.AddSingleton<IObjectStorageBucketResolver>(new FixedBucketResolver("osa-dev"));
 
@@ -808,7 +818,8 @@ public sealed class WorkflowTests
             {
                 var osaDbContext = scope.ServiceProvider.GetRequiredService<ObjectStorageAssetDbContext>();
                 await osaDbContext.Database.EnsureDeletedAsync();
-                await osaDbContext.Database.EnsureCreatedAsync();
+                if (useMigrations) await Microsoft.EntityFrameworkCore.Infrastructure.AccessorExtensions.GetService<Microsoft.EntityFrameworkCore.Migrations.IMigrator>(osaDbContext).MigrateAsync(targetMigration);
+                else await osaDbContext.Database.EnsureCreatedAsync();
                 await CreateOrdersTableAsync(osaDbContext);
             }
 
@@ -856,6 +867,15 @@ public sealed class WorkflowTests
         private static string BuildConnectionString(string databaseName)
         {
             var server = Environment.GetEnvironmentVariable("OSA_TEST_SQL_SERVER") ?? "10.0.2.2,1433";
+            if (server.StartsWith("(localdb)", StringComparison.OrdinalIgnoreCase)
+                || Environment.GetEnvironmentVariable("OSA_TEST_SQL_INTEGRATED_SECURITY") == "true")
+                return new SqlConnectionStringBuilder
+                {
+                    DataSource = server,
+                    InitialCatalog = databaseName,
+                    IntegratedSecurity = true,
+                    TrustServerCertificate = true
+                }.ConnectionString;
             var userId = Environment.GetEnvironmentVariable("OSA_TEST_SQL_USER") ?? "sa";
             var password = Environment.GetEnvironmentVariable("OSA_TEST_SQL_PASSWORD") ?? "Password@123";
 

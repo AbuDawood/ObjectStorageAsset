@@ -53,12 +53,23 @@ NuGet packages are produced only from the projects under `src/`:
 - `Elf.ObjectStorageAsset.Infrastructure`
 - `Elf.ObjectStorageAsset.Helpers`
 
-The GitHub Actions workflow at `.github/workflows/nuget.yml` restores, builds, and packs `ObjectStorageAsset.Pack.slnf`, which includes only those source projects. The repository `README.md` is embedded into every generated package.
+The GitHub Actions workflow at `.github/workflows/nuget.yml` runs unit and SQL integration tests,
+actual v0.1.6 binary compatibility checks, and both the in-memory-provider and real MinIO E2E runners
+against disposable local SQL Server databases. The opt-in million-row scale test remains a separate
+manual validation. Only after these checks pass does the workflow build and pack
+`ObjectStorageAsset.Pack.slnf`, using one version for assemblies, packages and internal dependencies.
+It checks all six package/symbol pairs and embeds this README and the license in every package.
 
 Publishing flow:
-- create a `NUGET_API_KEY` repository secret
-- push a version tag such as `v0.1.1`
-- the workflow publishes the generated `.nupkg` and `.snupkg` files to NuGet.org
+- Configure the existing `NUGET_API_KEY` repository secret with permission to publish all six packages.
+- Review the [v0.1.6 upgrade procedure](#upgrade-from-v016) before adopting v0.2.0. Publishing a package does not migrate any host database.
+- Merge the tested release changes into `main`, with `VersionPrefix` set to `0.2.0`.
+- Push the new `v0.2.0` tag at that merged commit. Tags must exactly match `VersionPrefix` and belong to `main`.
+- The workflow repeats validation, uploads the packages as a workflow artifact, then publishes the `.nupkg` and `.snupkg` files to NuGet.org.
+
+Pull requests, untagged `main` pushes and manual runs produce downloadable CI packages without
+publishing. Their version includes the run number and attempt. Never move an existing release tag
+or reuse a published package version; correct a published release with a new version.
 
 ## License
 
@@ -109,7 +120,7 @@ The runtime catalog can be resolved through `IObjectAssetBindingCatalog`.
 
 ## Persistence Core
 
-The persistence slice stores one `ObjectAsset` row per owned file.
+The library stores one payload row per asset, with a stable identity across lifecycle changes.
 
 Current persistence shape:
 - SQL Server + EF Core `8.0.11`
@@ -117,8 +128,11 @@ Current persistence shape:
 - schema-aware `__EFMigrationsHistory`
 - owner binding columns on `ObjectAssets`
 - stable `AssetId` as the immutable primary identifier for every asset row
-- optional temporary binding fields and ownership mode on `ObjectAssets`
-- immutable custom metadata bag stored as normalized JSON on `ObjectAssets`
+- `ObjectAssets` holds permanent local, external-owner and unresolved legacy registrations
+- `ObjectAssetTemporary` holds pending temporary bindings
+- `ObjectAssetArchive` holds logically deleted records, including retained-content records
+- `ObjectAssetIdentity` reserves each asset id and its current payload location
+- immutable custom metadata, ownership and validation evidence move with the payload
 - SQL Server `rowversion` for optimistic concurrency on asset updates
 - computed enum label columns such as `StatusLabel`
 
@@ -145,6 +159,165 @@ Default metadata stamps written with every object:
 - `osa-asset-id`
 - `osa-storage-namespace`
 - `osa-sha256`
+
+## Configurable Naming
+
+With no naming configuration, the existing default remains
+`{storageNamespace}/{yyyy}/{MM}/{assetId:N}{extension}`. A host can still register its own
+`IObjectKeyStrategy` before `AddObjectStorageAsset`; the library uses `TryAdd` and preserves it.
+
+Built-in templates use the strongly typed `ObjectKeyToken` enum and the read-only
+`ObjectKeyTokens.Definitions` catalog. Supported tokens are `StorageNamespace`, `AssetId`,
+`OriginalFileNameStem`, `Extension`, `Year`, `Month`, `Day`, `Hour`, `Minute`, `Second` and
+`Millisecond`. Dates use UTC and invariant formatting (`HH` is 24-hour time). Include the full
+`AssetId` token to preserve uniqueness. Paths reject traversal, control characters and keys over
+512 characters.
+
+```csharp
+options.Naming.ActiveProfile = new ObjectKeyNamingProfile("documents", 1,
+    new ObjectKeyTemplate()
+        .Token(ObjectKeyToken.StorageNamespace).Literal("/")
+        .Token(ObjectKeyToken.Year).Literal("/")
+        .Token(ObjectKeyToken.Month).Literal("/")
+        .Token(ObjectKeyToken.Day).Literal("/")
+        .Token(ObjectKeyToken.AssetId).Token(ObjectKeyToken.Extension).ToString());
+```
+
+Profile id/version pairs are immutable in `ObjectAssetNamingProfiles`. A changed definition requires
+a new version. For runtime changes, call `IObjectAssetNamingService.ActivateAsync(newProfile)` to
+register the definition before activation. The resolved key and profile version are captured when
+the input is staged. Binding a temporary file later never renames it. Imported assets and existing
+keys remain unchanged. A custom key strategy owns its configuration/versioning; OSA still persists
+its resolved key once.
+
+## SHA-256 Validation
+
+Uploads compute an expected SHA-256 digest incrementally. Computing or importing a digest does not
+verify the stored object. New and upgraded records default to `NotChecked`. Provider ETags are
+not treated as SHA-256 evidence.
+
+```csharp
+options.Integrity.FailureBehavior = Sha256FailureBehavior.Warning; // default
+options.Integrity.Triggers = Sha256VerificationTriggers.ExplicitOnly; // default
+// Optional: OnRead | AfterUpload. Guard rejects mismatches and failed verification.
+var result = await integrityService.VerifyAsync(assetId, cancellationToken);
+```
+
+Persisted states are `NotChecked`, `Valid`, `Mismatch` and `Failed`. OSA records attempt/completion
+times, actual digest, the observed object version when available, and a bounded failure reason.
+It never replaces the expected digest with the observed digest. Missing/invalid expected digests
+and provider failures are `Failed`; differing bytes or length are `Mismatch`. Archive and binding
+moves retain this evidence.
+
+Warning mode logs and returns the result while allowing available content through. A missing object
+still cannot be returned. Guard mode persists the result in an independent transaction before
+rejecting access, including when the host transaction later rolls back. Guarded reads verify the
+complete staged stream before exposing any bytes. On-read and after-upload verification add storage
+I/O; enable them deliberately. Explicit verification in Warning mode returns a `Failed` result for
+unavailable content; Guard throws `ObjectAssetIntegrityException` with its result.
+
+Staging defaults to a 4 MiB per-stream memory threshold, 16 MiB aggregate retained memory, four
+concurrent staging operations, 1,024 retained streams, 5 GiB per file and 20 GiB aggregate retained
+bytes. Configure these through `options.Buffering`, including a writable temporary directory. Large
+streams spill to disk and files are removed on disposal. Dispose returned content streams promptly.
+Providers can implement optional `IObjectStorageCopyProvider` to stream directly into bounded staging;
+legacy providers remain supported but control their own initial download buffering.
+
+## Binding and External Ownership
+
+| Binding kind | Payload table | Meaning |
+| --- | --- | --- |
+| `LocalOwner` | `ObjectAssets` | Bound to an owner in this OSA instance |
+| `ExternalOwner` | `ObjectAssets` | Owner is in another OSA instance/environment |
+| `LegacyUnresolved` | `ObjectAssets` | Legacy registration lacks sufficient ownership provenance |
+| `Temporary` | `ObjectAssetTemporary` | Awaiting local binding, subject to temporary expiry |
+
+Deleted payloads move to the archive regardless of their binding kind. `Managed`/`Referenced` governs
+physical deletion authority independently of owner location. External owner keys never populate local
+owner columns or match local-owner reads. Imported records are not treated as expiring temporary files.
+
+Configure persistent `LocalInstanceId` and `StorageAuthorityId` GUIDs; do not generate them on startup.
+An OSA instance identifies an owner environment; a storage authority identifies a physical storage
+configuration. Multiple instances may use one authority. Map other trusted authority ids with
+`StorageAuthorityAliases[id] = "provider-name"` and register that name as a keyed
+`IObjectStorageProvider`. Unknown authorities are rejected; OSA never guesses an endpoint from an id.
+Legacy authority `Guid.Empty` resolves to the configured default provider.
+
+Existing `ObjectAssetDescriptor` and `IObjectAssetRegistry` contracts remain version 2. Use the explicit
+`IObjectAssetExchangeRegistry` v3 methods for origin, current owner, storage version and naming
+provenance. Origin is preserved through forwarding and rebinding. Validation status is local evidence
+and is not trusted from a peer.
+
+For old peers, continue sending v2 payloads. They cannot consume v3. On receipt, use
+`RegisterLegacyDescriptorAsync(request, peerContext)` when the host knows the peer owner, origin or
+storage authority. A bare v2 registration becomes `LegacyUnresolved`; it stays permanent. A v2 round
+trip preserves richer provenance already known locally and rejects conflicting content/ownership.
+Unknown historical origin cannot be inferred by the upgrade; resolve it explicitly before v3 export.
+Use `IObjectAssetOwnerBinder.BindRegisteredAsync(...)` to attach a registered asset locally without
+copying its bytes.
+
+## Paged and Archive Reads
+
+Existing reader APIs remain available. For list endpoints, prefer SQL-computed summaries and
+`IObjectAssetPagedReader` owner, temporary, external-owner and archive methods. Pages use keyset
+cursors with a maximum size of 500. Pass the returned `Next` cursor to continue; concurrent writes
+do not provide a snapshot across pages. Owner and temporary pages sort by creation time/id; archive
+pages sort by deletion time/id.
+
+`GetRecordAsync(assetId)` follows the stable identity transparently. Normal content reads exclude
+deleted assets. `OpenArchivedReadAsync(assetId)` explicitly opens retained archive content; it returns
+null after physical deletion. Hosts do not need to union lifecycle tables.
+
+The SQL query bridge maps only permanent local-owner metadata and remains excluded from host
+migrations. Hosts with asset foreign keys should reference `ObjectAssetIdentityQueryModel.AssetId`,
+mapped to `ObjectAssetIdentity`, so references survive temporary binding and archival.
+
+## Upgrade from v0.1.6
+
+The upgrade includes schema expansion, identity reservation, resumable data movement, validation,
+and supporting indexes. Apply the entire migration sequence before starting the new runtime.
+
+The library owns its migrations and `[configuredSchema].[__EFMigrationsHistory]`; keep the host's
+history separate. Use a verified backup and stop **all old and new writers**, including maintenance,
+throughout the upgrade. Mixed binaries may exchange supported descriptors after deployment but
+must not write the same database during the split.
+
+1. Use one migration runner with the same connection and schema configuration as the host. Generate
+   an EF migration bundle or reviewed idempotent script from `ObjectStorageAssetDbContext`.
+2. Apply through `20261021052301_ReserveAssetIdentities`. This expands the schema and backfills stable
+   identities while leaving legacy payloads in place.
+3. If the host has foreign keys to `ObjectAssets.Id`, generate/apply a **host EF migration** that
+   drops those relationships and recreates them against `ObjectAssetIdentity.AssetId`. Keep OSA tables
+   excluded from host migrations. No host FK change is needed when the host has no such relationships.
+4. Apply `20261021052310_SplitAssetLifecycle`, `20261021052320_ValidateAssetLifecycle` and all subsequent
+   index/deletion-intent migrations. The split will
+   reject remaining payload-table FKs. Temporary rows move to their table and deleted rows to archive;
+   externally registered or ambiguous unbound records stay permanent. Counts and locations must pass
+   validation before startup is allowed.
+5. Configure stable instance/authority ids, peer mappings and desired naming/integrity options. Start
+   new writers, enabling maintenance only in the designated pod. Preserve the v0.1.6 expired-binding guard.
+
+The repository design-time factory reads `ConnectionStrings__ObjectStorageAsset` from environment
+configuration. Its migration command timeout defaults to 600 seconds. Supply the actual configured
+schema with `--schema`; increase `--command-timeout` for the measured workload. No connection or
+credentials belong in source control.
+
+```powershell
+dotnet ef database update 20261021052301_ReserveAssetIdentities --project src/Infrastructure --startup-project src/Infrastructure --context ObjectStorageAssetDbContext -- --schema osa --command-timeout 1800
+# Apply the host FK migration here, if needed.
+dotnet ef database update --project src/Infrastructure --startup-project src/Infrastructure --context ObjectStorageAssetDbContext -- --schema osa --command-timeout 1800
+```
+
+The split uses committed batches of 1,000 and checkpoints so interrupted work can resume without
+duplicating ids. Existing hashes remain expected digests; validation defaults to `NotChecked`. Existing
+object keys and custom metadata are preserved. No upgrade operation should contact or rename storage
+objects. Downgrade after moving data is blocked; restore a verified backup to return to the old layout.
+Do not edit previously published/applied migration IDs.
+
+Temporary bindings without an expiry remain non-expiring, as in v0.1.6. Legacy pending/failed deletes
+lack an original physical-delete decision. Their first maintenance attempt chooses physical deletion
+only when both physical-delete options allow it; otherwise content is retained. New deletion requests
+persist their decision and retries honor it, independently of later configuration changes.
 
 ## MinIO Provider
 
@@ -385,13 +558,42 @@ Reconciliation now also surfaces:
 - unbound/orphan assets
 - referenced-only assets
 
-When `EnableMaintenanceWorker` is enabled:
-- expired temporary assets are processed on the configured interval
-- pending deletes are retried
-- delete failures are retried
+The worker is disabled by default. Enable it in one designated pod. A SQL session application lock,
+scoped to the database and configured schema, prevents overlapping manual or scheduled maintenance
+across pods. A contender skips the cycle. The lock uses a dedicated non-pooled connection and is
+released when that connection closes. This is a maintenance lock; normal asset writes use transactions,
+unique constraints and rowversion checks.
 
-When `AutoApplyMigrations` is enabled:
-- the bootstrap package runs `MigrateAsync()` on startup
+Expiry, pending-delete and retry-delete tasks execute sequentially, each in a fresh DI scope. A task
+failure is logged and does not block subsequent tasks; cancellation stops the cycle. Each task handles
+at most one bounded batch per cycle. Defaults are 200 records, four concurrent provider operations,
+ten delete attempts, and exponential backoff with jitter from one minute up to twelve hours. Exhausted
+retries remain visible with `DeleteRetrySuspended = true`; an operator must investigate before resetting
+the retry state. Failures created in a cycle are excluded from that cycle's retry task.
+
+```csharp
+options.EnableMaintenanceWorker = true; // designated maintenance pod only
+options.MaintenanceInterval = TimeSpan.FromMinutes(15); // shared default
+options.Maintenance.ExpiryInterval = TimeSpan.FromMinutes(5);
+options.Maintenance.PendingDeleteInterval = TimeSpan.FromMinutes(2);
+options.Maintenance.RetryInterval = TimeSpan.FromMinutes(1);
+options.Maintenance.BatchSize = 200;
+options.Maintenance.ProviderConcurrency = 4;
+```
+
+`IObjectAssetMaintenanceRunner.RunOnceAsync()` uses the same lock, due-time checks and failure isolation.
+The `Elf.ObjectStorageAsset.Maintenance` meter exposes processed counts, failures, skipped cycles,
+duration and time since success. Configure your logging/metrics exporter in the host.
+
+`ReconcileAsync()` is explicit; the hosted worker never calls it. It reports registered assets only,
+including missing objects, expired temporary bindings, external ownership, legacy unresolved records
+and referenced assets. It never enumerates a bucket or deletes storage-only objects. For large datasets,
+use `IObjectAssetReconciliationReader.ReconcilePageAsync()` and persist the returned cursor. The legacy
+full-report API collects all report ids in memory for compatibility.
+
+`AutoApplyMigrations` can initialize a new database. Existing databases needing the lifecycle split must
+use the explicit upgrade procedure above. Startup readiness rejects pending migrations or an incomplete
+split, even when automatic migration is disabled.
 
 Current lifecycle states:
 - `PendingUpload`
@@ -534,6 +736,17 @@ powershell -ExecutionPolicy Bypass -File .\test\LiveE2E\reset-local-minio.ps1
 ```
 
 ## Verification
+
+The lifecycle enhancement validation includes SQL concurrency and upgrade/recovery tests, actual
+v0.1.6 binary interop, 64 MiB generated-stream spill/hash/cleanup tests, the enhanced in-memory E2E,
+and real SQL + MinIO E2E with stored-content tampering and Guard rejection.
+
+The optional scale scenario uses `OSA_SCALE_MAIN_ROWS=1000000`, 1,000 owners and a 100,000-record
+expired temporary backlog. One LocalDB run returned 50 owner summaries in about 1.9 seconds and a
+25-item owner page in 104 ms; expiry handled 200 records in about 3.1 seconds and tracked only those
+200 payloads. The synthetic bulk seed took about 12m50s. These local cold-query observations include
+index/storage costs and are not production latency targets; size indexes and transaction-log capacity
+against the host's actual owner distribution and workload.
 
 Current verification set:
 - `dotnet build ObjectStorageAsset.sln -m:1`

@@ -1,3 +1,5 @@
+using Elf.ObjectStorageAsset.Application;
+
 namespace Elf.ObjectStorageAsset;
 
 /// <summary>
@@ -5,6 +7,13 @@ namespace Elf.ObjectStorageAsset;
 /// </summary>
 public sealed class ObjectStorageAssetOptions
 {
+    public Guid LocalInstanceId { get; set; }
+    public Guid StorageAuthorityId { get; set; }
+    public Dictionary<Guid, string> StorageAuthorityAliases { get; } = new();
+    public ObjectAssetMaintenanceOptions Maintenance { get; } = new();
+    public ObjectAssetBufferOptions Buffering { get; } = new();
+    public ObjectAssetIntegrityOptions Integrity { get; } = new();
+    public ObjectKeyNamingOptions Naming { get; } = new();
     /// <summary>
     /// SQL Server connection string used by the library.
     /// </summary>
