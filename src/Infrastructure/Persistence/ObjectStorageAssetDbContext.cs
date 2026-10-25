@@ -1,6 +1,5 @@
 using System.Reflection;
 using System.Data;
-using System.Text.Json;
 using Microsoft.Data.SqlClient;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
@@ -12,7 +11,7 @@ using Elf.ObjectStorageAsset.Infrastructure.Persistence.Configurations;
 
 namespace Elf.ObjectStorageAsset.Infrastructure.Persistence;
 
-public sealed class ObjectStorageAssetDbContext : DbContext
+public sealed partial class ObjectStorageAssetDbContext : DbContext
 {
     public const string DefaultSchemaName = "osa";
     public const string MigrationsHistoryTableName = "__EFMigrationsHistory";
@@ -44,13 +43,28 @@ public sealed class ObjectStorageAssetDbContext : DbContext
 
     // Only bracket-escaped schema identifiers are interpolated; all data values are SqlParameters.
 #pragma warning disable EF1002
+    /// <summary>Tracked lookups reserve mutation intent; use tracking=false for a metadata-only lookup.</summary>
     public async Task<ObjectAsset?> FindAssetAsync(Guid assetId, bool tracking = true, CancellationToken cancellationToken = default)
+        => await FindAssetCoreAsync(assetId, tracking, tracking, cancellationToken).ConfigureAwait(false);
+
+    /// <summary>Loads a mutable asset while reserving its identity until the caller's transaction completes.</summary>
+    public Task<ObjectAsset?> FindAssetForUpdateAsync(Guid assetId, CancellationToken cancellationToken = default)
+    {
+        if (Database.CurrentTransaction is null)
+            throw new InvalidOperationException("A mutation lookup requires an explicit OSA transaction.");
+        return FindAssetCoreAsync(assetId, true, true, cancellationToken);
+    }
+
+    private async Task<ObjectAsset?> FindAssetCoreAsync(Guid assetId, bool tracking, bool forUpdate, CancellationToken cancellationToken)
     {
         await using var transaction = Database.CurrentTransaction is null
             ? await Database.BeginTransactionAsync(IsolationLevel.RepeatableRead, cancellationToken) : null;
         var table = "[" + _schemaName.Replace("]", "]]", StringComparison.Ordinal) + "].[ObjectAssetIdentity]";
-        var identity = await AssetIdentities.FromSqlRaw($"SELECT * FROM {table} WITH (HOLDLOCK) WHERE [AssetId]=@id",
-            new SqlParameter("@id", assetId)).AsNoTracking().SingleOrDefaultAsync(cancellationToken);
+        // Tracked lookups are mutation lookups. The public metadata readers use tracking=false.
+        // Reserve U before loading the payload, avoiding competing S-to-X conversions in caller transactions.
+        var hint = forUpdate ? "UPDLOCK,HOLDLOCK" : "HOLDLOCK";
+        var identity = await AssetIdentities.FromSqlRaw($"SELECT * FROM {table} WITH ({hint}) WHERE [AssetId]=@id",
+            new SqlParameter("@id", assetId)).AsNoTracking().SingleOrDefaultAsync(cancellationToken).ConfigureAwait(false);
         IQueryable<ObjectAsset> query = identity?.Location switch
         {
             ObjectAssetLocation.Main => PermanentAssets,
@@ -81,15 +95,10 @@ public sealed class ObjectStorageAssetDbContext : DbContext
         var moves = entries.Where(e => e.State == EntityState.Modified && e.Entity.GetType() != StorageType(e.Entity)).ToArray();
         if (moves.Length > 0 && !acceptAllChangesOnSuccess)
             throw new NotSupportedException("Lifecycle table moves require acceptAllChangesOnSuccess=true.");
-        await using var transaction = moves.Length > 0 && Database.CurrentTransaction is null
-            ? await Database.BeginTransactionAsync(cancellationToken) : null;
-        if (moves.Length > 0)
-        {
-            var ids = moves.Select(e => e.Entity.Id).ToArray();
-            var table = "[" + _schemaName.Replace("]", "]]", StringComparison.Ordinal) + "].[ObjectAssetIdentity]";
-            await AssetIdentities.FromSqlRaw($"SELECT * FROM {table} WITH (XLOCK,HOLDLOCK) WHERE [AssetId] IN (SELECT CONVERT(uniqueidentifier,[value]) FROM OPENJSON(@ids))",
-                new SqlParameter("@ids", SqlDbType.NVarChar, -1) { Value = JsonSerializer.Serialize(ids) }).LoadAsync(cancellationToken);
-        }
+        // Protect every payload write, including a pending-delete update preceding a move.
+        // Otherwise a reader can hold S(identity), wait for X(payload), and block the writer's identity update.
+        await using var transaction = entries.Length > 0
+            ? await BeginAssetSaveAsync(entries.Select(e => e.Entity.Id), cancellationToken).ConfigureAwait(false) : null;
         foreach (var entry in entries.Where(e => e.State == EntityState.Added))
             AssetIdentities.Add(new ObjectAssetIdentity
             {

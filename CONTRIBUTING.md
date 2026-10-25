@@ -176,6 +176,12 @@ testing; point it at a build of tag `v0.1.6` (`2d323d419c1d3e380a36efb0d88685eb4
 
 ## Release validation
 
+Mutation paths must reserve identity write intent before payload writes. Keep multi-asset acquisition
+in SQL key order, including a caller transaction's known replacement/finalization set. Pure reads use
+untracked lookups. Retest competing same-asset moves, reversed batches, pending-write/read races and
+independent-asset concurrency when changing locking. Never place provider IO inside a new long-lived
+database transaction or retry provider side effects as part of database deadlock recovery.
+
 The NuGet workflow gates all six packages on the non-scale unit/SQL suite, pinned v0.1.6 binary
 interop, and both E2E runners, using a disposable SQL Server container and a MinIO process built
 from pinned official source on the runner.

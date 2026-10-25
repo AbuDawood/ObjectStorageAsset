@@ -549,6 +549,26 @@ var query = dbContext.Orders.Select(order => new
 
 ## Maintenance and Reconciliation
 
+Asset mutations reserve identity locks before writing payload rows. Tracked point lookups reserve an
+update lock; metadata-only point lookups use `tracking: false`. Saves lock every affected identity
+exclusively before payload writes, using SQL key order in one parameterized batch. This also protects
+pending-delete updates before their eventual archive move. Unrelated existing asset identities can
+still be processed concurrently.
+
+Normal session/coordinator APIs handle these reservations internally. Custom code that owns an OSA
+transaction can use `FindAssetForUpdateAsync(id)` for a single asset. For several assets, call
+`ReserveAssetsForUpdateAsync(allIds)` before the first payload read or write, then load and change them.
+Reserve the complete set up front when one outer transaction spans several operations; separately
+reserving different subsets in opposing orders can still deadlock. Do not promote a metadata-only
+lookup to a mutation later in the same transaction. Keep caller-owned transactions short and arrange
+host-table locks consistently with OSA locks; locks remain held until the outer transaction completes.
+
+An OSA-owned save retries deadlocks during identity-lock acquisition at most three times with short
+jittered delays, before any payload write. It does not replay provider operations or retry a partially
+executed save. A deadlock in a caller-owned transaction is propagated: roll back and retry the complete
+caller unit with fresh contexts, rather than continuing the aborted transaction. Default OSA saves use
+short metadata transactions; an outer caller transaction determines its own lock lifetime.
+
 Lifecycle maintenance is exposed through `IObjectAssetMaintenanceService`:
 - `ExpireAssetsAsync`
 - `ProcessPendingDeletesAsync`

@@ -89,7 +89,7 @@ internal sealed class ObjectAssetLifecycleManager(
             asset.MarkDeleted(DateTimeOffset.UtcNow, physicallyDeleted: true);
             await _objectStorageAssetDbContext.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
         }
-        catch (Exception ex)
+        catch (Exception ex) when (!ObjectAssetSqlConcurrency.IsDeadlock(ex))
         {
             asset.MarkDeleteFailed(DateTimeOffset.UtcNow, ex.Message);
             asset.ScheduleDeleteRetry(DateTimeOffset.UtcNow + _options.Maintenance.InitialRetryDelay, _options.Maintenance.MaxAttempts);
@@ -111,6 +111,18 @@ internal sealed class ObjectAssetLifecycleManager(
         if (temporaryBindingId == Guid.Empty)
         {
             throw new InvalidOperationException("Temporary binding finalization requires a non-empty binding id.");
+        }
+
+        if (_objectStorageAssetDbContext.Database.CurrentTransaction is not null)
+        {
+            var candidates = await BuildTemporaryBindingQuery(ownerDefinition, temporaryBindingId).AsNoTracking()
+                .Select(x => new { x.Id, x.SlotName, x.SlotMultiplicity }).ToListAsync(cancellationToken).ConfigureAwait(false);
+            var ids = candidates.Select(x => x.Id).ToList();
+            foreach (var slot in candidates.Where(x => x.SlotMultiplicity == ObjectAssetSlotMultiplicity.Single)
+                         .Select(x => x.SlotName).Distinct())
+                ids.AddRange(await BuildOwnerSlotQuery(ownerDefinition, normalizedOwnerKey, slot).AsNoTracking()
+                    .Where(x => x.Status != ObjectAssetStatus.Deleted).Select(x => x.Id).ToListAsync(cancellationToken).ConfigureAwait(false));
+            await _objectStorageAssetDbContext.ReserveAssetsForUpdateAsync(ids, cancellationToken).ConfigureAwait(false);
         }
 
         var assets = await BuildTemporaryBindingQuery(ownerDefinition, temporaryBindingId)
@@ -315,7 +327,7 @@ internal sealed class ObjectAssetLifecycleManager(
                 putResult.VersionId);
             await _objectStorageAssetDbContext.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
         }
-        catch (Exception ex)
+        catch (Exception ex) when (!ObjectAssetSqlConcurrency.IsDeadlock(ex))
         {
             asset.MarkUploadFailed(DateTimeOffset.UtcNow, ex.Message);
             await _objectStorageAssetDbContext.SaveChangesAsync(cancellationToken).ConfigureAwait(false);

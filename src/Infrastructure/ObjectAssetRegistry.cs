@@ -81,6 +81,7 @@ internal sealed partial class ObjectAssetRegistry(ObjectStorageAssetDbContext ob
         }
 
         var results = new List<ObjectAssetDescriptorRegistrationResult>(requests.Count);
+        await _objectStorageAssetDbContext.ReserveAssetsInCallerTransactionAsync(requests.Select(x => x.Descriptor.AssetId), cancellationToken);
         foreach (var batch in requests.Chunk(options.Maintenance.BatchSize))
         {
             foreach (var request in batch) ValidateDescriptor(request.Descriptor);

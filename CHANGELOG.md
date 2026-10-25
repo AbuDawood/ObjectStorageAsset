@@ -21,6 +21,11 @@ All notable changes to this project are documented in this file.
 - Existing databases require an explicit staged EF upgrade and host FK retargeting when applicable.
 - Release tags must match the package version and identify a commit already merged into `main`; assemblies and packages use the same version.
 
+### Fixed
+- Reserve write intent for tracked identity lookups and acquire identity locks in SQL key order before payload writes, avoiding the reproduced shared-to-exclusive lock conversion deadlock.
+- Cover pending-delete writes as well as archive moves; reserve known multi-asset mutation sets before caller-transaction work.
+- Bound pre-write lock acquisition retries without replaying provider operations or hiding caller-owned transaction deadlocks.
+
 ### Upgrade
 - EF-generated schema migrations include guarded, resumable v0.1.6 data splitting and conservation validation.
 - Preserve temporary bindings without expiry; require host FK retargeting before moving referenced payloads.
