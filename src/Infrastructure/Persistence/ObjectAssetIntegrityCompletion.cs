@@ -122,6 +122,10 @@ public sealed partial class ObjectStorageAssetDbContext
 
     internal Task<IDbContextTransaction?> BeginEvidenceSaveAsync(Guid id, CancellationToken ct) => BeginAssetSaveAsync([id], ct);
 
+    // The journal already holds the identity lock and only changes validation/evidence properties.
+    internal int SaveReservedIntegrityChanges() => base.SaveChanges(true);
+    internal Task<int> SaveReservedIntegrityChangesAsync(CancellationToken ct) => base.SaveChangesAsync(true, ct);
+
     public override void Dispose()
     {
         _disposingEvidence = true;

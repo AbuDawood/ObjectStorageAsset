@@ -62,6 +62,7 @@ public static class DependencyInjection
         services.AddScoped<IObjectAssetMaintenanceService>(sp => sp.GetRequiredService<ObjectAssetMaintenanceService>());
         services.AddScoped<IObjectAssetMaintenanceTasks>(sp => sp.GetRequiredService<ObjectAssetMaintenanceService>());
         services.TryAddSingleton<IObjectAssetMaintenanceLock, SqlObjectAssetMaintenanceLock>();
+        services.AddScoped<IObjectAssetMaintenanceSchedule, ObjectAssetMaintenanceSchedule>();
         services.AddSingleton<IObjectAssetMaintenanceRunner, ObjectAssetMaintenanceRunner>();
         services.AddDbContext<ObjectStorageAssetDbContext>((provider, builder) =>
         {

@@ -46,6 +46,11 @@ public static class DependencyInjection
             || options.Maintenance.ExpiryInterval <= TimeSpan.Zero || options.Maintenance.PendingDeleteInterval <= TimeSpan.Zero
             || options.Maintenance.RetryInterval <= TimeSpan.Zero || options.Maintenance.IntegrityEvidenceInterval <= TimeSpan.Zero
             || options.Integrity.EvidenceRetention <= TimeSpan.Zero
+            || options.Maintenance.Evidence is null || options.Maintenance.Evidence.BatchSize < 1
+            || options.Maintenance.Evidence.PurgeBatchSize < 1 || options.Maintenance.Evidence.MaximumBatchesPerRun < 1
+            || options.Maintenance.Evidence.TimeBudget <= TimeSpan.Zero || options.Maintenance.Evidence.MetricsInterval <= TimeSpan.Zero
+            || options.Maintenance.Evidence.InitialRetryDelay <= TimeSpan.Zero
+            || options.Maintenance.Evidence.MaximumRetryDelay < options.Maintenance.Evidence.InitialRetryDelay
             || options.Buffering.MemoryThresholdBytes < 0 || options.Buffering.MaximumMemoryBytes < 0
             || options.Buffering.MaximumStagedFiles < 1
             || !Enum.IsDefined(options.Integrity.FailureBehavior)

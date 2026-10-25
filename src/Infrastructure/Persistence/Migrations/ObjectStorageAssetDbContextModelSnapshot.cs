@@ -391,6 +391,11 @@ namespace Elf.ObjectStorageAsset.Infrastructure.Persistence.Migrations
                     b.Property<long>("ExpectedSize")
                         .HasColumnType("bigint");
 
+                    b.Property<DateTimeOffset>("NextAttemptAtUtc")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("datetimeoffset")
+                        .HasDefaultValueSql("SYSUTCDATETIME()");
+
                     b.Property<string>("ObjectKey")
                         .IsRequired()
                         .HasMaxLength(512)
@@ -412,6 +417,9 @@ namespace Elf.ObjectStorageAsset.Infrastructure.Persistence.Migrations
                     b.Property<DateTimeOffset?>("ResolvedAtUtc")
                         .HasColumnType("datetimeoffset");
 
+                    b.Property<int>("RetryCount")
+                        .HasColumnType("int");
+
                     b.Property<int>("Status")
                         .HasColumnType("int");
 
@@ -424,13 +432,54 @@ namespace Elf.ObjectStorageAsset.Infrastructure.Persistence.Migrations
                     b.Property<Guid>("StorageAuthorityId")
                         .HasColumnType("uniqueidentifier");
 
+                    b.Property<string>("SynchronizationError")
+                        .HasMaxLength(128)
+                        .HasColumnType("nvarchar(128)");
+
                     b.HasKey("Id");
+
+                    b.HasIndex("NextAttemptAtUtc", "Id")
+                        .HasFilter("[ResolvedAtUtc] IS NULL");
+
+                    SqlServerIndexBuilderExtensions.IncludeProperties(b.HasIndex("NextAttemptAtUtc", "Id"), new[] { "AssetId", "AttemptedAtUtc" });
 
                     b.HasIndex("ResolvedAtUtc", "Id");
 
                     b.HasIndex("AssetId", "AttemptedAtUtc", "Id");
 
                     b.ToTable("ObjectAssetIntegrityEvidence", "osa");
+                });
+
+            modelBuilder.Entity("Elf.ObjectStorageAsset.Domain.Entities.ObjectAssetMaintenanceState", b =>
+                {
+                    b.Property<string>("Name")
+                        .HasMaxLength(64)
+                        .HasColumnType("nvarchar(64)");
+
+                    b.Property<long?>("ExpiredEvidenceCount")
+                        .HasColumnType("bigint");
+
+                    b.Property<int>("FailureCount")
+                        .HasColumnType("int");
+
+                    b.Property<DateTimeOffset?>("LastSucceededAtUtc")
+                        .HasColumnType("datetimeoffset");
+
+                    b.Property<DateTimeOffset>("NextRunAtUtc")
+                        .HasColumnType("datetimeoffset");
+
+                    b.Property<DateTimeOffset?>("ObservedAtUtc")
+                        .HasColumnType("datetimeoffset");
+
+                    b.Property<DateTimeOffset?>("OldestPendingEvidenceAtUtc")
+                        .HasColumnType("datetimeoffset");
+
+                    b.Property<long?>("PendingEvidenceCount")
+                        .HasColumnType("bigint");
+
+                    b.HasKey("Name");
+
+                    b.ToTable("ObjectAssetMaintenanceState", "osa");
                 });
 
             modelBuilder.Entity("Elf.ObjectStorageAsset.Domain.Entities.ObjectAssetNamingProfileRecord", b =>

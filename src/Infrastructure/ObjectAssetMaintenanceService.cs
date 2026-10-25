@@ -30,6 +30,9 @@ internal sealed class ObjectAssetMaintenanceService(
     public Task<int> SynchronizeIntegrityEvidenceAsync(CancellationToken cancellationToken = default)
         => journal.MaintainAsync(cancellationToken);
 
+    public Task<IntegrityBacklogSnapshot> ObserveIntegrityEvidenceAsync(CancellationToken cancellationToken)
+        => journal.ObserveAsync(cancellationToken);
+
     private async Task<int> RunLockedAsync(Func<CancellationToken, Task<int>> action, CancellationToken ct)
     {
         if (_objectStorageAssetDbContext.HasCallerTransaction)

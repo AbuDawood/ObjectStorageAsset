@@ -42,6 +42,7 @@ public sealed partial class ObjectStorageAssetDbContext : DbContext
     public DbSet<ObjectAssetNamingProfileRecord> NamingProfiles => Set<ObjectAssetNamingProfileRecord>();
     public DbSet<ObjectAssetUpgradeState> UpgradeState => Set<ObjectAssetUpgradeState>();
     public DbSet<ObjectAssetIntegrityEvidence> IntegrityEvidence => Set<ObjectAssetIntegrityEvidence>();
+    public DbSet<ObjectAssetMaintenanceState> MaintenanceState => Set<ObjectAssetMaintenanceState>();
 
     // Only bracket-escaped schema identifiers are interpolated; all data values are SqlParameters.
 #pragma warning disable EF1002
@@ -229,10 +230,19 @@ public sealed partial class ObjectStorageAssetDbContext : DbContext
             b.Property(x => x.ObjectKey).HasMaxLength(512).UseCollation("Latin1_General_100_BIN2");
             b.Property(x => x.Error).HasMaxLength(1024);
             b.Property(x => x.Resolution).HasMaxLength(32);
+            b.Property(x => x.SynchronizationError).HasMaxLength(128);
+            b.Property(x => x.NextAttemptAtUtc).HasDefaultValueSql("SYSUTCDATETIME()");
             b.HasIndex(x => new { x.AssetId, x.AttemptedAtUtc, x.Id });
             b.HasIndex(x => new { x.ResolvedAtUtc, x.Id });
+            b.HasIndex(x => new { x.NextAttemptAtUtc, x.Id }).HasFilter("[ResolvedAtUtc] IS NULL")
+                .IncludeProperties(x => new { x.AssetId, x.AttemptedAtUtc });
             // Intentionally no FK: evidence must commit while the caller holds asset/identity locks,
             // including an upload whose metadata may subsequently be rolled back.
+        });
+        modelBuilder.Entity<ObjectAssetMaintenanceState>(b =>
+        {
+            b.ToTable("ObjectAssetMaintenanceState"); b.HasKey(x => x.Name);
+            b.Property(x => x.Name).HasMaxLength(64);
         });
         ConfigureEnumLabelComputedColumns(modelBuilder, _schemaName);
 

@@ -148,7 +148,8 @@ For every slice:
   Never recompute old or temporary asset keys after a configuration change.
 - Stage large content in bounded chunks with spill-to-disk, aggregate quotas and deterministic cleanup.
   An optional provider copy operation returns metadata for the bytes actually copied.
-- Maintenance runs in one designated pod using the shared SQL session application lock. Tasks are
+- Identical pods can all enable maintenance; use the shared SQL session application lock and persisted
+  per-task due times/backoff. Tasks are
   sequential and isolated; database records are processed in bounded batches with provider concurrency.
   Keep backoff and maximum attempts; do not retry a newly failed record again in the same cycle.
 - Generate EF schema migrations/snapshots with EF CLI. Data moves need verified source columns,
@@ -184,6 +185,12 @@ Transactional SHA verification must use the caller's metadata view and independe
 evidence without an asset FK or a lookup against caller-locked rows. Preserve unsaved caller changes,
 rollback-resistant evidence, Warning/Guard semantics, ambient transactions and post-commit rowversion
 usability. Keep synchronization and retention bounded and test pending-evidence visibility without a worker.
+Use pooled, non-enlisted journal connections and reset session settings before returning them. Coalesce
+asset cache writes while preserving every evidence row. Keep recovery/purge budgets independent, persist
+retry eligibility and never expire pending evidence. Sample indexed backlog aggregates on the shared
+schedule. Test different pod service providers against the same SQL database, including restart/backoff.
+Run the opt-in sustained evidence benchmark alongside cleanup and report measured workload/latencies;
+do not treat a passing deadlock test or the separate payload scale run as evidence throughput proof.
 
 Mutation paths must reserve identity write intent before payload writes. Keep multi-asset acquisition
 in SQL key order, including a caller transaction's known replacement/finalization set. Pure reads use

@@ -11,6 +11,19 @@ public sealed class ObjectAssetMaintenanceOptions
     public TimeSpan? PendingDeleteInterval { get; set; }
     public TimeSpan? RetryInterval { get; set; }
     public TimeSpan? IntegrityEvidenceInterval { get; set; }
+    public ObjectAssetEvidenceMaintenanceOptions Evidence { get; set; } = new();
+}
+
+public sealed class ObjectAssetEvidenceMaintenanceOptions
+{
+    public int BatchSize { get; set; } = 200;
+    public int PurgeBatchSize { get; set; } = 1000;
+    public int MaximumBatchesPerRun { get; set; } = 10;
+    /// <summary>Per-phase budget checked between asset transactions/purge commands; in-flight work may finish afterward.</summary>
+    public TimeSpan TimeBudget { get; set; } = TimeSpan.FromSeconds(5);
+    public TimeSpan InitialRetryDelay { get; set; } = TimeSpan.FromSeconds(1);
+    public TimeSpan MaximumRetryDelay { get; set; } = TimeSpan.FromMinutes(5);
+    public TimeSpan MetricsInterval { get; set; } = TimeSpan.FromMinutes(5);
 }
 
 public sealed class ObjectAssetBufferOptions

@@ -20,4 +20,7 @@ public sealed class ObjectAssetIntegrityEvidence
     public string? Error { get; set; }
     public DateTimeOffset? ResolvedAtUtc { get; set; }
     public string? Resolution { get; set; }
+    public int RetryCount { get; set; }
+    public DateTimeOffset NextAttemptAtUtc { get; set; } = DateTimeOffset.UtcNow;
+    public string? SynchronizationError { get; set; }
 }

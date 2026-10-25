@@ -181,6 +181,7 @@ public sealed partial class WorkflowTests
             (await reader.GetTemporaryPageAsync(bindingId)).Items.Single().Sha256ValidationStatus.Should().Be(Sha256ValidationStatus.Mismatch);
             await transaction.CommitAsync();
         }
+        await db.IntegrityEvidence.Where(e => e.ResolvedAtUtc == null).ExecuteUpdateAsync(s => s.SetProperty(e => e.NextAttemptAtUtc, DateTimeOffset.UtcNow));
         await fixture.RootProvider.GetRequiredService<IObjectAssetMaintenanceRunner>().RunOnceAsync();
         using var verify = fixture.RootProvider.CreateScope();
         var check = verify.ServiceProvider.GetRequiredService<ObjectStorageAssetDbContext>();
@@ -257,7 +258,8 @@ public sealed partial class WorkflowTests
     [Test]
     public async Task EvidenceRecovery_ShouldRespectNewerResultsAndBoundRetentionWork()
     {
-        await using var fixture = await SqlServerFixture.CreateAsync(configure: o => o.Maintenance.BatchSize = 1);
+        await using var fixture = await SqlServerFixture.CreateAsync(configure: o =>
+        { o.Maintenance.Evidence.BatchSize = 1; o.Maintenance.Evidence.PurgeBatchSize = 1; o.Maintenance.Evidence.MaximumBatchesPerRun = 1; });
         using var scope = fixture.RootProvider.CreateScope();
         var uploaded = await scope.ServiceProvider.GetRequiredService<IObjectAssetTemporarySessionFactory>().For<Order>(Guid.NewGuid())
             .AddAsync(OrderAssets.Attachments, CreateStream("correct"), "a.txt", "text/plain");

@@ -11,7 +11,9 @@ All notable changes to this project are documented in this file.
 - Configurable versioned naming templates with typed placeholders and preserved staging-time keys.
 - Persisted SHA-256 verification evidence (`NotChecked` by default), Warning/Guard policies and opt-in read/upload triggers.
 - Bounded memory/disk staging and optional provider copy-to-stream support.
-- Single designated-pod maintenance with a SQL session lock, isolated sequential tasks, task intervals and bounded retries.
+- Multi-pod maintenance with one SQL session lock, shared persisted task schedules/backoff and isolated sequential tasks.
+- Pooled evidence connections, coalesced validation writes, persisted fair retries and independently bounded multi-batch recovery/pruning.
+- Shared-schedule evidence backlog sampling, integrity throughput/latency metrics and a sustained SQL evidence benchmark.
 - Real SQL concurrency/integrity/lifecycle coverage, v0.1.6 binary compatibility checks and a configurable SQL scale scenario.
 - Release pipeline gates packaging on unit/SQL, old-binary compatibility and real MinIO E2E validation.
 

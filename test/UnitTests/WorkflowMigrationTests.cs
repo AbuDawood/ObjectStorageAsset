@@ -18,6 +18,33 @@ public sealed partial class WorkflowTests
     private const string SplitMigration = "20261021052310_SplitAssetLifecycle";
 
     [TestCase("osa")]
+    [TestCase("osa'through]put")]
+    public async Task ThroughputMigration_ShouldBackfillExistingEvidenceAndGuardItsDowngrade(string schema)
+    {
+        const string previous = "20261025183907_AddIntegrityEvidence";
+        await using var fixture = await SqlServerFixture.CreateAsync(schema: schema, useMigrations: true, targetMigration: previous);
+        using var scope = fixture.RootProvider.CreateScope(); var db = scope.ServiceProvider.GetRequiredService<ObjectStorageAssetDbContext>();
+        var table = "[" + schema.Replace("]", "]]") + "].[ObjectAssetIntegrityEvidence]";
+#pragma warning disable EF1002
+        await db.Database.ExecuteSqlRawAsync($"""
+            INSERT INTO {table} ([AssetId],[StorageAuthorityId],[BucketName],[ObjectKey],[ExpectedHash],[ExpectedSize],
+                [Status],[AttemptedAtUtc],[Error])
+            VALUES (NEWID(),'00000000-0000-0000-0000-000000000000',N'b',N'key',@hash,4,2,SYSDATETIMEOFFSET(),N'retained');
+            """, new SqlParameter("@hash", new string('a', 64)));
+#pragma warning restore EF1002
+        await db.GetService<IMigrator>().MigrateAsync();
+        var evidence = await db.IntegrityEvidence.AsNoTracking().SingleAsync();
+        evidence.Status.Should().Be(Sha256ValidationStatus.Mismatch); evidence.Error.Should().Be("retained");
+        evidence.RetryCount.Should().Be(0); evidence.SynchronizationError.Should().BeNull();
+        evidence.NextAttemptAtUtc.Should().BeOnOrBefore(DateTimeOffset.UtcNow.AddSeconds(1));
+        (await db.MaintenanceState.CountAsync()).Should().Be(0);
+        Func<Task> down = () => db.GetService<IMigrator>().MigrateAsync(previous);
+        await down.Should().ThrowAsync<SqlException>().WithMessage("*evidence*blocked*");
+        (await db.Database.GetPendingMigrationsAsync()).Should().BeEmpty();
+        (await db.IntegrityEvidence.CountAsync()).Should().Be(1);
+    }
+
+    [TestCase("osa")]
     [TestCase("osa]evidence")]
     public async Task IntegrityEvidenceMigration_ShouldPreserveExistingValidationAndGuardDowngrade(string schema)
     {

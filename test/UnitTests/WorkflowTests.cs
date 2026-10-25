@@ -785,7 +785,8 @@ public sealed partial class WorkflowTests
             string schema = "osa",
             bool useMigrations = false,
             InMemoryMinioLikeObjectStorageProvider? sharedStorage = null,
-            string? targetMigration = null)
+            string? targetMigration = null,
+            TimeProvider? timeProvider = null)
         {
             var databaseName = $"ObjectStorageAssetWorkflow_{Guid.NewGuid():N}";
             var connectionString = BuildConnectionString(databaseName);
@@ -812,6 +813,7 @@ public sealed partial class WorkflowTests
                         schema)));
             services.AddSingleton<IObjectStorageProvider>(storageProvider);
             services.AddSingleton<IObjectStorageBucketResolver>(new FixedBucketResolver("osa-dev"));
+            if (timeProvider is not null) services.AddSingleton(timeProvider);
 
             var rootProvider = services.BuildServiceProvider(validateScopes: true);
             using (var scope = rootProvider.CreateScope())

@@ -1,4 +1,5 @@
 using System.Security.Cryptography;
+using System.Diagnostics;
 using Elf.ObjectStorageAsset.Application;
 using Elf.ObjectStorageAsset.Domain.Entities;
 using Elf.ObjectStorageAsset.Domain.Enums;
@@ -74,6 +75,7 @@ internal sealed class ObjectAssetIntegrityService(ObjectStorageAssetDbContext db
         bool journalEvidence = false)
     {
         var attempted = DateTimeOffset.UtcNow;
+        var started = Stopwatch.GetTimestamp();
         var requestedVersion = asset.ProviderVersionId;
         Stream? content = null;
         ObjectAssetIntegrityResult? result = null;
@@ -96,6 +98,8 @@ internal sealed class ObjectAssetIntegrityService(ObjectStorageAssetDbContext db
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
             if (content is not null) await content.DisposeAsync();
+            if (verify) ObjectAssetIntegrityMetrics.VerificationDuration.Record(Stopwatch.GetElapsedTime(started).TotalMilliseconds,
+                new KeyValuePair<string, object?>("status", "Cancelled"));
             throw;
         }
         catch (Exception ex)
@@ -137,6 +141,11 @@ internal sealed class ObjectAssetIntegrityService(ObjectStorageAssetDbContext db
             return (content!, result);
         }
         catch { if (content is not null) await content.DisposeAsync(); throw; }
+        finally
+        {
+            if (verify) ObjectAssetIntegrityMetrics.VerificationDuration.Record(Stopwatch.GetElapsedTime(started).TotalMilliseconds,
+                new KeyValuePair<string, object?>("status", result?.Status.ToString() ?? "Failed"));
+        }
     }
 }
 
