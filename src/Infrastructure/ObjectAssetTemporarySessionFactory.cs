@@ -9,7 +9,8 @@ internal sealed class ObjectAssetTemporarySessionFactory(
     IObjectAssetBindingCatalog bindingCatalog,
     ObjectAssetLifecycleManager lifecycleManager,
     ObjectStorageAssetDbContext objectStorageAssetDbContext,
-    ObjectStorageAssetRuntimeOptions options)
+    ObjectStorageAssetRuntimeOptions options,
+    ObjectAssetStager stager)
     : IObjectAssetTemporarySessionFactory
 {
     private readonly IObjectAssetBindingCatalog _bindingCatalog = bindingCatalog;
@@ -33,7 +34,7 @@ internal sealed class ObjectAssetTemporarySessionFactory(
             ownerDefinition,
             _lifecycleManager,
             _objectStorageAssetDbContext,
-            _options);
+            _options, stager);
     }
 
     private sealed class ObjectAssetTemporarySession<T>(
@@ -42,7 +43,8 @@ internal sealed class ObjectAssetTemporarySessionFactory(
         ObjectAssetOwnerDefinition ownerDefinition,
         ObjectAssetLifecycleManager lifecycleManager,
         ObjectStorageAssetDbContext objectStorageAssetDbContext,
-        ObjectStorageAssetRuntimeOptions options)
+        ObjectStorageAssetRuntimeOptions options,
+        ObjectAssetStager stager)
         : IObjectAssetTemporarySession<T>
     {
         private readonly ObjectAssetOwnerDefinition _ownerDefinition = ownerDefinition;
@@ -68,11 +70,19 @@ internal sealed class ObjectAssetTemporarySessionFactory(
                     $"Slot '{slot.Name}' does not allow SetSingleAsync because it is configured as '{slotDefinition.Multiplicity}'.");
             }
 
-            var existingAssets = await _lifecycleManager.BuildTemporaryBindingSlotQuery(
+            await using var buffered = await stager.StageAsync(content, fileName, contentType, expiresAtUtc, metadata, cancellationToken).ConfigureAwait(false);
+            var existingQuery = _lifecycleManager.BuildTemporaryBindingSlotQuery(
                     _ownerDefinition,
                     TemporaryBindingId,
                     slot.Name)
-                .Where(x => x.Status != ObjectAssetStatus.Deleted)
+                .Where(x => x.Status != ObjectAssetStatus.Deleted);
+            if (_objectStorageAssetDbContext.HasCallerTransaction)
+            {
+                var ids = await existingQuery.AsNoTracking().Select(x => x.Id).ToListAsync(cancellationToken).ConfigureAwait(false);
+                ids.Add(buffered.AssetId);
+                await _objectStorageAssetDbContext.ReserveAssetsForUpdateAsync(ids, cancellationToken).ConfigureAwait(false);
+            }
+            var existingAssets = await existingQuery
                 .ToListAsync(cancellationToken)
                 .ConfigureAwait(false);
 
@@ -86,7 +96,7 @@ internal sealed class ObjectAssetTemporarySessionFactory(
                     .ConfigureAwait(false);
             }
 
-            return await UploadAsync(slot, content, fileName, contentType, expiresAtUtc, metadata, cancellationToken).ConfigureAwait(false);
+            return await UploadBufferedAsync(slot, buffered, cancellationToken).ConfigureAwait(false);
         }
 
         public Task<ObjectAssetReferenceDto> AddAsync(
@@ -115,7 +125,8 @@ internal sealed class ObjectAssetTemporarySessionFactory(
                 throw new InvalidOperationException("Object asset removal requires a non-empty asset id.");
             }
 
-            var asset = await _objectStorageAssetDbContext.ObjectAssets
+            await _objectStorageAssetDbContext.ReserveAssetsInCallerTransactionAsync([assetId], cancellationToken).ConfigureAwait(false);
+            var asset = await _objectStorageAssetDbContext.TemporaryAssets
                 .FirstOrDefaultAsync(
                     x => x.Id == assetId
                          && x.TemporaryBindingId == TemporaryBindingId
@@ -146,7 +157,7 @@ internal sealed class ObjectAssetTemporarySessionFactory(
             IReadOnlyDictionary<string, string>? metadata,
             CancellationToken cancellationToken)
         {
-            var bufferedContent = await ObjectAssetBufferedContent.CreateAsync(
+            await using var bufferedContent = await stager.StageAsync(
                     content,
                     fileName,
                     contentType,
@@ -155,6 +166,12 @@ internal sealed class ObjectAssetTemporarySessionFactory(
                     cancellationToken)
                 .ConfigureAwait(false);
 
+            return await UploadBufferedAsync(slot, bufferedContent, cancellationToken).ConfigureAwait(false);
+        }
+
+        private async Task<ObjectAssetReferenceDto> UploadBufferedAsync(ObjectAssetSlot slot,
+            ObjectAssetBufferedContent bufferedContent, CancellationToken cancellationToken)
+        {
             var asset = await _lifecycleManager.CreateAndUploadTemporaryAssetAsync(
                     _ownerDefinition,
                     slot,

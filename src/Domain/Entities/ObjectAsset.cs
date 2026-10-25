@@ -5,9 +5,9 @@ namespace Elf.ObjectStorageAsset.Domain.Entities;
 /// <summary>
 /// Aggregate root for one object-storage-backed file.
 /// </summary>
-public sealed class ObjectAsset
+public abstract class ObjectAsset
 {
-    private ObjectAsset()
+    protected ObjectAsset()
     {
     }
 
@@ -73,6 +73,116 @@ public sealed class ObjectAsset
 
     public byte[] RowVersion { get; private set; } = [];
 
+    public ObjectAssetBindingKind BindingKind { get; private set; }
+    public ObjectAssetOriginKind OriginKind { get; private set; }
+    public Guid? OriginInstanceId { get; private set; }
+    public Guid? OriginAssetId { get; private set; }
+    public Guid? ExternalOwnerInstanceId { get; private set; }
+    public string? ExternalOwnerType { get; private set; }
+    public ObjectAssetOwnerKeyKind? ExternalOwnerKeyKind { get; private set; }
+    public string? ExternalOwnerKey { get; private set; }
+    public Guid StorageAuthorityId { get; private set; }
+    public string? NamingProfileId { get; private set; }
+    public int? NamingProfileVersion { get; private set; }
+    public string? NamingDefinitionHash { get; private set; }
+    public Sha256ValidationStatus Sha256ValidationStatus { get; private set; }
+    public DateTimeOffset? Sha256ValidationAttemptedAtUtc { get; private set; }
+    public DateTimeOffset? Sha256ValidationCompletedAtUtc { get; private set; }
+    public string? Sha256ValidationActualHash { get; private set; }
+    public string? Sha256ValidationObjectVersion { get; private set; }
+    public string? Sha256ValidationError { get; private set; }
+    public int DeleteAttemptCount { get; private set; }
+    public DateTimeOffset? NextDeleteAttemptAtUtc { get; private set; }
+    public bool DeleteRetrySuspended { get; private set; }
+    public bool? PhysicalDeletionRequested { get; private set; }
+
+    public void SetCreationProvenance(Guid instanceId, Guid authorityId)
+    {
+        if (OriginInstanceId.HasValue && (OriginInstanceId != instanceId || OriginAssetId != Id))
+            throw new InvalidOperationException("Known asset origin cannot be replaced.");
+        OriginKind = ObjectAssetOriginKind.Local;
+        OriginInstanceId = instanceId == Guid.Empty ? null : instanceId;
+        OriginAssetId = Id;
+        StorageAuthorityId = authorityId;
+    }
+
+    public void SetLegacyStorageAuthority(Guid authorityId) => StorageAuthorityId = authorityId;
+    public void SetImportedOrigin(Guid instanceId, Guid assetId)
+    {
+        if (instanceId == Guid.Empty || assetId == Guid.Empty) throw new InvalidOperationException("Complete origin is required.");
+        if (OriginInstanceId.HasValue && (OriginInstanceId != instanceId || OriginAssetId != assetId))
+            throw new InvalidOperationException("Known asset origin cannot be replaced.");
+        OriginKind = ObjectAssetOriginKind.ImportedFromOsa; OriginInstanceId = instanceId; OriginAssetId = assetId;
+    }
+
+    public void SetNamingProvenance(string profileId, int version, string hash)
+    {
+        if (string.IsNullOrWhiteSpace(profileId) || profileId.Length > 128 || version < 1
+            || hash.Length != 64 || !hash.All(Uri.IsHexDigit))
+            throw new InvalidOperationException("Naming provenance requires a profile id, positive version and SHA-256 definition hash.");
+        if (NamingProfileId is not null && (NamingProfileId != profileId || NamingProfileVersion != version
+            || !string.Equals(NamingDefinitionHash, hash, StringComparison.OrdinalIgnoreCase)))
+            throw new InvalidOperationException("Known naming provenance cannot be replaced.");
+        NamingProfileId = profileId;
+        NamingProfileVersion = version;
+        NamingDefinitionHash = hash;
+    }
+
+    public void SetExternalOwnership(Guid instanceId, string ownerType, ObjectAssetOwnerKeyKind keyKind,
+        string ownerKey, Guid originInstanceId, Guid originAssetId, Guid storageAuthorityId)
+    {
+        if (instanceId == Guid.Empty
+            || string.IsNullOrWhiteSpace(ownerType) || string.IsNullOrWhiteSpace(ownerKey)
+            || keyKind == ObjectAssetOwnerKeyKind.Unassigned)
+            throw new InvalidOperationException("External ownership requires a complete owner reference.");
+        if ((originInstanceId == Guid.Empty) != (originAssetId == Guid.Empty))
+            throw new InvalidOperationException("Origin references must be complete or explicitly unknown.");
+        if (originInstanceId != Guid.Empty && OriginInstanceId.HasValue && (OriginInstanceId != originInstanceId || OriginAssetId != originAssetId))
+            throw new InvalidOperationException("Known asset origin cannot be replaced.");
+        ClearOwnerBinding();
+        BindingKind = ObjectAssetBindingKind.ExternalOwner;
+        ExternalOwnerInstanceId = instanceId;
+        ExternalOwnerType = ownerType.Trim();
+        ExternalOwnerKeyKind = keyKind;
+        ExternalOwnerKey = ownerKey.Trim();
+        if (originInstanceId != Guid.Empty) SetImportedOrigin(originInstanceId, originAssetId);
+        StorageAuthorityId = storageAuthorityId;
+    }
+
+    public void RecordSha256Validation(Sha256ValidationStatus status, DateTimeOffset attemptedAtUtc,
+        DateTimeOffset? completedAtUtc, string? actualHash, string? objectVersion, string? error)
+    {
+        if (Sha256ValidationAttemptedAtUtc > attemptedAtUtc) return;
+        Sha256ValidationStatus = status;
+        Sha256ValidationAttemptedAtUtc = attemptedAtUtc;
+        Sha256ValidationCompletedAtUtc = completedAtUtc;
+        Sha256ValidationActualHash = actualHash;
+        Sha256ValidationObjectVersion = objectVersion;
+        Sha256ValidationError = string.IsNullOrEmpty(error) ? null : error[..Math.Min(error.Length, 1024)];
+    }
+
+    public void ScheduleDeleteRetry(DateTimeOffset nextAttempt, int maxAttempts)
+    {
+        DeleteAttemptCount++;
+        NextDeleteAttemptAtUtc = nextAttempt;
+        DeleteRetrySuspended = DeleteAttemptCount >= maxAttempts;
+    }
+
+    public ObjectAsset CopyToLocation(ObjectAssetLocation location)
+    {
+        ObjectAsset target = location switch
+        {
+            ObjectAssetLocation.Main => new PermanentObjectAsset(),
+            ObjectAssetLocation.Temporary => new TemporaryObjectAsset(),
+            ObjectAssetLocation.Archive => new ArchivedObjectAsset(),
+            _ => throw new ArgumentOutOfRangeException(nameof(location))
+        };
+        foreach (var property in typeof(ObjectAsset).GetProperties())
+            if (property.SetMethod is not null) property.SetValue(target, property.GetValue(this));
+        target.RowVersion = [];
+        return target;
+    }
+
     public static ObjectAsset CreatePendingUpload(
         Guid id,
         string ownerType,
@@ -126,7 +236,7 @@ public sealed class ObjectAsset
             throw new InvalidOperationException("OriginalFileName is required.");
         }
 
-        return new ObjectAsset
+        return new PermanentObjectAsset
         {
             Id = id,
             OwnerType = ownerType.Trim(),
@@ -184,7 +294,7 @@ public sealed class ObjectAsset
             throw new InvalidOperationException("OriginalFileName is required.");
         }
 
-        return new ObjectAsset
+        return new PermanentObjectAsset
         {
             Id = id,
             OwnerType = string.Empty,
@@ -213,6 +323,8 @@ public sealed class ObjectAsset
 
     public void BindOwner(long ownerKey)
     {
+        EnsureCanBind();
+        BindingKind = ObjectAssetBindingKind.LocalOwner;
         OwnerKeyKind = ObjectAssetOwnerKeyKind.Int64;
         OwnerKeyInt64 = ownerKey;
         OwnerKeyGuid = null;
@@ -227,6 +339,9 @@ public sealed class ObjectAsset
             throw new InvalidOperationException("Guid owner key is required.");
         }
 
+        EnsureCanBind();
+        BindingKind = ObjectAssetBindingKind.LocalOwner;
+
         OwnerKeyKind = ObjectAssetOwnerKeyKind.Guid;
         OwnerKeyInt64 = null;
         OwnerKeyGuid = ownerKey;
@@ -240,6 +355,9 @@ public sealed class ObjectAsset
         {
             throw new InvalidOperationException("String owner key is required.");
         }
+
+        EnsureCanBind();
+        BindingKind = ObjectAssetBindingKind.LocalOwner;
 
         OwnerKeyKind = ObjectAssetOwnerKeyKind.String;
         OwnerKeyInt64 = null;
@@ -279,6 +397,7 @@ public sealed class ObjectAsset
         OwnerKeyText = null;
         TemporaryBindingId = temporaryBindingId;
         TemporaryBindingExpiresAtUtc = temporaryBindingExpiresAtUtc;
+        BindingKind = ObjectAssetBindingKind.Temporary;
     }
 
     public void SetOwnerSlot(
@@ -308,6 +427,7 @@ public sealed class ObjectAsset
         OwnerKeyGuid = null;
         OwnerKeyText = null;
         ClearTemporaryBinding();
+        BindingKind = ObjectAssetBindingKind.LegacyUnresolved;
     }
 
     public void MarkUploadSucceeded(
@@ -324,6 +444,12 @@ public sealed class ObjectAsset
         LastStatusChangedAtUtc = uploadedAtUtc;
     }
 
+    public void RecordStorageVersion(string? etag, string? versionId)
+    {
+        ETag = etag;
+        ProviderVersionId = versionId;
+    }
+
     public void MarkUploadFailed(DateTimeOffset failedAtUtc, string? errorMessage)
     {
         Status = ObjectAssetStatus.UploadFailed;
@@ -337,6 +463,12 @@ public sealed class ObjectAsset
         Status = ObjectAssetStatus.PendingDelete;
         ErrorMessage = null;
         LastStatusChangedAtUtc = deletedAtUtc;
+    }
+
+    public void MarkPendingDelete(DateTimeOffset deletedAtUtc, bool physicallyDelete)
+    {
+        PhysicalDeletionRequested = physicallyDelete;
+        MarkPendingDelete(deletedAtUtc);
     }
 
     public void MarkDeleted(DateTimeOffset deletedAtUtc, bool physicallyDeleted)
@@ -374,7 +506,7 @@ public sealed class ObjectAsset
 
     public bool IsUnbound()
     {
-        return !IsOwnerBound() && !IsTemporarilyBound();
+        return BindingKind == ObjectAssetBindingKind.LegacyUnresolved;
     }
 
     public bool HasExpired(DateTimeOffset utcNow)
@@ -393,7 +525,7 @@ public sealed class ObjectAsset
     {
         return string.IsNullOrWhiteSpace(errorMessage)
             ? null
-            : errorMessage.Trim();
+            : errorMessage.Trim()[..Math.Min(errorMessage.Trim().Length, 1024)];
     }
 
     private static string NormalizeCustomMetadataJson(string? customMetadataJson)
@@ -407,5 +539,16 @@ public sealed class ObjectAsset
     {
         TemporaryBindingId = null;
         TemporaryBindingExpiresAtUtc = null;
+    }
+
+    private void EnsureCanBind()
+    {
+        if (Status is ObjectAssetStatus.Deleted or ObjectAssetStatus.PendingDelete or ObjectAssetStatus.DeleteFailed
+            || HasExpiredTemporaryBinding(DateTimeOffset.UtcNow))
+            throw new InvalidOperationException("Deleted, deleting, or expired assets cannot be bound.");
+        ExternalOwnerInstanceId = null;
+        ExternalOwnerType = null;
+        ExternalOwnerKeyKind = null;
+        ExternalOwnerKey = null;
     }
 }

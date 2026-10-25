@@ -8,8 +8,12 @@ namespace Elf.ObjectStorageAsset.Infrastructure;
 /// </summary>
 public sealed class DefaultObjectKeyStrategy : IObjectKeyStrategy
 {
+    private readonly ObjectStorageAssetRuntimeOptions? _options;
+    public DefaultObjectKeyStrategy() { }
+    public DefaultObjectKeyStrategy(ObjectStorageAssetRuntimeOptions options) => _options = options;
     public string CreateObjectKey(ObjectKeyContext context)
     {
+        if (_options?.Naming.ActiveProfile is { } profile) return profile.Render(context);
         if (context.AssetId == Guid.Empty)
         {
             throw new InvalidOperationException("Object key creation requires a non-empty asset id.");

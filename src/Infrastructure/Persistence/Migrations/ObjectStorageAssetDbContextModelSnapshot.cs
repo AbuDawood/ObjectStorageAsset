@@ -26,8 +26,18 @@ namespace Elf.ObjectStorageAsset.Infrastructure.Persistence.Migrations
             modelBuilder.Entity("Elf.ObjectStorageAsset.Domain.Entities.ObjectAsset", b =>
                 {
                     b.Property<Guid>("Id")
-                        .ValueGeneratedOnAdd()
                         .HasColumnType("uniqueidentifier");
+
+                    b.Property<int>("BindingKind")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int")
+                        .HasDefaultValue(0);
+
+                    b.Property<string>("BindingKindLabel")
+                        .ValueGeneratedOnAddOrUpdate()
+                        .HasMaxLength(16)
+                        .HasColumnType("nvarchar(16)")
+                        .HasComputedColumnSql("(CASE [BindingKind] WHEN 0 THEN N'LegacyUnresolved' WHEN 1 THEN N'LocalOwner' WHEN 2 THEN N'ExternalOwner' WHEN 3 THEN N'Temporary' ELSE NULL END)", true);
 
                     b.Property<string>("BucketName")
                         .IsRequired()
@@ -45,6 +55,12 @@ namespace Elf.ObjectStorageAsset.Infrastructure.Persistence.Migrations
                     b.Property<string>("CustomMetadataJson")
                         .IsRequired()
                         .HasColumnType("nvarchar(max)");
+
+                    b.Property<int>("DeleteAttemptCount")
+                        .HasColumnType("int");
+
+                    b.Property<bool>("DeleteRetrySuspended")
+                        .HasColumnType("bit");
 
                     b.Property<DateTimeOffset?>("DeletedAtUtc")
                         .HasColumnType("datetimeoffset");
@@ -65,13 +81,62 @@ namespace Elf.ObjectStorageAsset.Infrastructure.Persistence.Migrations
                         .HasMaxLength(32)
                         .HasColumnType("nvarchar(32)");
 
+                    b.Property<Guid?>("ExternalOwnerInstanceId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("ExternalOwnerKey")
+                        .HasMaxLength(256)
+                        .HasColumnType("nvarchar(256)");
+
+                    b.Property<int?>("ExternalOwnerKeyKind")
+                        .HasColumnType("int");
+
+                    b.Property<string>("ExternalOwnerKeyKindLabel")
+                        .ValueGeneratedOnAddOrUpdate()
+                        .HasMaxLength(10)
+                        .HasColumnType("nvarchar(10)")
+                        .HasComputedColumnSql("(CASE [ExternalOwnerKeyKind] WHEN 0 THEN N'Unassigned' WHEN 1 THEN N'Int64' WHEN 2 THEN N'Guid' WHEN 3 THEN N'String' ELSE NULL END)", true);
+
+                    b.Property<string>("ExternalOwnerType")
+                        .HasMaxLength(128)
+                        .HasColumnType("nvarchar(128)");
+
                     b.Property<DateTimeOffset>("LastStatusChangedAtUtc")
+                        .HasColumnType("datetimeoffset");
+
+                    b.Property<string>("NamingDefinitionHash")
+                        .HasMaxLength(64)
+                        .HasColumnType("nvarchar(64)");
+
+                    b.Property<string>("NamingProfileId")
+                        .HasMaxLength(128)
+                        .HasColumnType("nvarchar(128)");
+
+                    b.Property<int?>("NamingProfileVersion")
+                        .HasColumnType("int");
+
+                    b.Property<DateTimeOffset?>("NextDeleteAttemptAtUtc")
                         .HasColumnType("datetimeoffset");
 
                     b.Property<string>("ObjectKey")
                         .IsRequired()
                         .HasMaxLength(512)
                         .HasColumnType("nvarchar(512)");
+
+                    b.Property<Guid?>("OriginAssetId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<Guid?>("OriginInstanceId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<int>("OriginKind")
+                        .HasColumnType("int");
+
+                    b.Property<string>("OriginKindLabel")
+                        .ValueGeneratedOnAddOrUpdate()
+                        .HasMaxLength(15)
+                        .HasColumnType("nvarchar(15)")
+                        .HasComputedColumnSql("(CASE [OriginKind] WHEN 0 THEN N'LegacyUnknown' WHEN 1 THEN N'Local' WHEN 2 THEN N'ImportedFromOsa' ELSE NULL END)", true);
 
                     b.Property<string>("OriginalFileName")
                         .IsRequired()
@@ -114,6 +179,9 @@ namespace Elf.ObjectStorageAsset.Infrastructure.Persistence.Migrations
                     b.Property<DateTimeOffset?>("PhysicalDeletedAtUtc")
                         .HasColumnType("datetimeoffset");
 
+                    b.Property<bool?>("PhysicalDeletionRequested")
+                        .HasColumnType("bit");
+
                     b.Property<string>("ProviderVersionId")
                         .HasMaxLength(128)
                         .HasColumnType("nvarchar(128)");
@@ -128,6 +196,35 @@ namespace Elf.ObjectStorageAsset.Infrastructure.Persistence.Migrations
                         .IsRequired()
                         .HasMaxLength(64)
                         .HasColumnType("nvarchar(64)");
+
+                    b.Property<string>("Sha256ValidationActualHash")
+                        .HasMaxLength(64)
+                        .HasColumnType("nvarchar(64)");
+
+                    b.Property<DateTimeOffset?>("Sha256ValidationAttemptedAtUtc")
+                        .HasColumnType("datetimeoffset");
+
+                    b.Property<DateTimeOffset?>("Sha256ValidationCompletedAtUtc")
+                        .HasColumnType("datetimeoffset");
+
+                    b.Property<string>("Sha256ValidationError")
+                        .HasMaxLength(1024)
+                        .HasColumnType("nvarchar(1024)");
+
+                    b.Property<string>("Sha256ValidationObjectVersion")
+                        .HasMaxLength(128)
+                        .HasColumnType("nvarchar(128)");
+
+                    b.Property<int>("Sha256ValidationStatus")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int")
+                        .HasDefaultValue(0);
+
+                    b.Property<string>("Sha256ValidationStatusLabel")
+                        .ValueGeneratedOnAddOrUpdate()
+                        .HasMaxLength(10)
+                        .HasColumnType("nvarchar(10)")
+                        .HasComputedColumnSql("(CASE [Sha256ValidationStatus] WHEN 0 THEN N'NotChecked' WHEN 1 THEN N'Valid' WHEN 2 THEN N'Mismatch' WHEN 3 THEN N'Failed' ELSE NULL END)", true);
 
                     b.Property<long>("SizeBytes")
                         .ValueGeneratedOnAdd()
@@ -157,6 +254,9 @@ namespace Elf.ObjectStorageAsset.Infrastructure.Persistence.Migrations
                         .HasColumnType("nvarchar(13)")
                         .HasComputedColumnSql("(CASE [Status] WHEN 1 THEN N'PendingUpload' WHEN 2 THEN N'Active' WHEN 3 THEN N'UploadFailed' WHEN 4 THEN N'PendingDelete' WHEN 5 THEN N'Deleted' WHEN 6 THEN N'DeleteFailed' ELSE NULL END)", true);
 
+                    b.Property<Guid>("StorageAuthorityId")
+                        .HasColumnType("uniqueidentifier");
+
                     b.Property<string>("StorageNamespace")
                         .IsRequired()
                         .HasMaxLength(128)
@@ -173,8 +273,7 @@ namespace Elf.ObjectStorageAsset.Infrastructure.Persistence.Migrations
 
                     b.HasKey("Id");
 
-                    b.HasIndex("ObjectKey")
-                        .IsUnique();
+                    b.HasIndex("CreatedAtUtc", "Id");
 
                     b.HasIndex("Status", "ExpiresAtUtc");
 
@@ -184,13 +283,270 @@ namespace Elf.ObjectStorageAsset.Infrastructure.Persistence.Migrations
 
                     b.HasIndex("TemporaryBindingId", "Status");
 
+                    b.HasIndex("Status", "LastStatusChangedAtUtc", "Id");
+
+                    b.HasIndex("Status", "NextDeleteAttemptAtUtc", "DeleteRetrySuspended");
+
+                    b.HasIndex("TemporaryBindingId", "Status", "CreatedAtUtc", "Id");
+
+                    b.HasIndex("OwnerType", "SlotName", "OwnerKeyGuid", "Status", "CreatedAtUtc", "Id");
+
+                    SqlServerIndexBuilderExtensions.IncludeProperties(b.HasIndex("OwnerType", "SlotName", "OwnerKeyGuid", "Status", "CreatedAtUtc", "Id"), new[] { "BindingKind", "OwnerKeyKind" });
+
+                    b.HasIndex("OwnerType", "SlotName", "OwnerKeyInt64", "Status", "CreatedAtUtc", "Id");
+
+                    SqlServerIndexBuilderExtensions.IncludeProperties(b.HasIndex("OwnerType", "SlotName", "OwnerKeyInt64", "Status", "CreatedAtUtc", "Id"), new[] { "BindingKind", "OwnerKeyKind" });
+
+                    b.HasIndex("OwnerType", "SlotName", "OwnerKeyText", "Status", "CreatedAtUtc", "Id");
+
+                    SqlServerIndexBuilderExtensions.IncludeProperties(b.HasIndex("OwnerType", "SlotName", "OwnerKeyText", "Status", "CreatedAtUtc", "Id"), new[] { "BindingKind", "OwnerKeyKind" });
+
+                    b.HasIndex("ExternalOwnerInstanceId", "ExternalOwnerType", "ExternalOwnerKeyKind", "ExternalOwnerKey", "Status", "CreatedAtUtc", "Id")
+                        .HasFilter("[BindingKind]=2 AND [Status]=2");
+
                     b.HasIndex("OwnerType", "OwnerKeyKind", "OwnerKeyInt64", "OwnerKeyGuid", "OwnerKeyText", "SlotName", "Status");
 
                     b.HasIndex("OwnerType", "OwnerKeyKind", "OwnerKeyInt64", "OwnerKeyGuid", "OwnerKeyText", "SlotName", "TemporaryBindingId")
                         .IsUnique()
                         .HasFilter("[SlotMultiplicity] = 1 AND [Status] IN (1, 2, 3, 4, 6)");
 
+                    b.ToTable((string)null);
+
+                    b.UseTpcMappingStrategy();
+                });
+
+            modelBuilder.Entity("Elf.ObjectStorageAsset.Domain.Entities.ObjectAssetIdentity", b =>
+                {
+                    b.Property<Guid>("AssetId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("BucketName")
+                        .IsRequired()
+                        .HasMaxLength(128)
+                        .HasColumnType("nvarchar(128)")
+                        .UseCollation("Latin1_General_100_BIN2");
+
+                    b.Property<int>("Location")
+                        .HasColumnType("int");
+
+                    b.Property<string>("LocationLabel")
+                        .ValueGeneratedOnAddOrUpdate()
+                        .HasMaxLength(9)
+                        .HasColumnType("nvarchar(9)")
+                        .HasComputedColumnSql("(CASE [Location] WHEN 0 THEN N'Main' WHEN 1 THEN N'Temporary' WHEN 2 THEN N'Archive' ELSE NULL END)", true);
+
+                    b.Property<string>("ObjectKey")
+                        .IsRequired()
+                        .HasMaxLength(512)
+                        .HasColumnType("nvarchar(512)")
+                        .UseCollation("Latin1_General_100_BIN2");
+
+                    b.Property<Guid>("StorageAuthorityId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.HasKey("AssetId");
+
+                    b.HasIndex("StorageAuthorityId", "BucketName", "ObjectKey")
+                        .IsUnique();
+
+                    b.ToTable("ObjectAssetIdentity", "osa");
+                });
+
+            modelBuilder.Entity("Elf.ObjectStorageAsset.Domain.Entities.ObjectAssetIntegrityEvidence", b =>
+                {
+                    b.Property<long>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint");
+
+                    SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<long>("Id"));
+
+                    b.Property<string>("ActualHash")
+                        .HasMaxLength(64)
+                        .HasColumnType("nvarchar(64)");
+
+                    b.Property<Guid>("AssetId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<DateTimeOffset>("AttemptedAtUtc")
+                        .HasColumnType("datetimeoffset");
+
+                    b.Property<string>("BucketName")
+                        .IsRequired()
+                        .HasMaxLength(128)
+                        .HasColumnType("nvarchar(128)")
+                        .UseCollation("Latin1_General_100_BIN2");
+
+                    b.Property<DateTimeOffset?>("CompletedAtUtc")
+                        .HasColumnType("datetimeoffset");
+
+                    b.Property<string>("Error")
+                        .HasMaxLength(1024)
+                        .HasColumnType("nvarchar(1024)");
+
+                    b.Property<string>("ExpectedHash")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("nvarchar(64)");
+
+                    b.Property<long>("ExpectedSize")
+                        .HasColumnType("bigint");
+
+                    b.Property<DateTimeOffset>("NextAttemptAtUtc")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("datetimeoffset")
+                        .HasDefaultValueSql("SYSUTCDATETIME()");
+
+                    b.Property<string>("ObjectKey")
+                        .IsRequired()
+                        .HasMaxLength(512)
+                        .HasColumnType("nvarchar(512)")
+                        .UseCollation("Latin1_General_100_BIN2");
+
+                    b.Property<string>("ObjectVersion")
+                        .HasMaxLength(256)
+                        .HasColumnType("nvarchar(256)");
+
+                    b.Property<string>("RequestedVersion")
+                        .HasMaxLength(256)
+                        .HasColumnType("nvarchar(256)");
+
+                    b.Property<string>("Resolution")
+                        .HasMaxLength(32)
+                        .HasColumnType("nvarchar(32)");
+
+                    b.Property<DateTimeOffset?>("ResolvedAtUtc")
+                        .HasColumnType("datetimeoffset");
+
+                    b.Property<int>("RetryCount")
+                        .HasColumnType("int");
+
+                    b.Property<int>("Status")
+                        .HasColumnType("int");
+
+                    b.Property<string>("StatusLabel")
+                        .ValueGeneratedOnAddOrUpdate()
+                        .HasMaxLength(10)
+                        .HasColumnType("nvarchar(10)")
+                        .HasComputedColumnSql("(CASE [Status] WHEN 0 THEN N'NotChecked' WHEN 1 THEN N'Valid' WHEN 2 THEN N'Mismatch' WHEN 3 THEN N'Failed' ELSE NULL END)", true);
+
+                    b.Property<Guid>("StorageAuthorityId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("SynchronizationError")
+                        .HasMaxLength(128)
+                        .HasColumnType("nvarchar(128)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("NextAttemptAtUtc", "Id")
+                        .HasFilter("[ResolvedAtUtc] IS NULL");
+
+                    SqlServerIndexBuilderExtensions.IncludeProperties(b.HasIndex("NextAttemptAtUtc", "Id"), new[] { "AssetId", "AttemptedAtUtc" });
+
+                    b.HasIndex("ResolvedAtUtc", "Id");
+
+                    b.HasIndex("AssetId", "AttemptedAtUtc", "Id");
+
+                    b.ToTable("ObjectAssetIntegrityEvidence", "osa");
+                });
+
+            modelBuilder.Entity("Elf.ObjectStorageAsset.Domain.Entities.ObjectAssetMaintenanceState", b =>
+                {
+                    b.Property<string>("Name")
+                        .HasMaxLength(64)
+                        .HasColumnType("nvarchar(64)");
+
+                    b.Property<long?>("ExpiredEvidenceCount")
+                        .HasColumnType("bigint");
+
+                    b.Property<int>("FailureCount")
+                        .HasColumnType("int");
+
+                    b.Property<DateTimeOffset?>("LastSucceededAtUtc")
+                        .HasColumnType("datetimeoffset");
+
+                    b.Property<DateTimeOffset>("NextRunAtUtc")
+                        .HasColumnType("datetimeoffset");
+
+                    b.Property<DateTimeOffset?>("ObservedAtUtc")
+                        .HasColumnType("datetimeoffset");
+
+                    b.Property<DateTimeOffset?>("OldestPendingEvidenceAtUtc")
+                        .HasColumnType("datetimeoffset");
+
+                    b.Property<long?>("PendingEvidenceCount")
+                        .HasColumnType("bigint");
+
+                    b.HasKey("Name");
+
+                    b.ToTable("ObjectAssetMaintenanceState", "osa");
+                });
+
+            modelBuilder.Entity("Elf.ObjectStorageAsset.Domain.Entities.ObjectAssetNamingProfileRecord", b =>
+                {
+                    b.Property<string>("ProfileId")
+                        .HasMaxLength(128)
+                        .HasColumnType("nvarchar(128)");
+
+                    b.Property<int>("Version")
+                        .HasColumnType("int");
+
+                    b.Property<int>("DefinitionFormatVersion")
+                        .HasColumnType("int");
+
+                    b.Property<string>("DefinitionHash")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("nvarchar(64)");
+
+                    b.Property<string>("Template")
+                        .IsRequired()
+                        .HasMaxLength(1024)
+                        .HasColumnType("nvarchar(1024)");
+
+                    b.HasKey("ProfileId", "Version");
+
+                    b.ToTable("ObjectAssetNamingProfiles", "osa");
+                });
+
+            modelBuilder.Entity("Elf.ObjectStorageAsset.Domain.Entities.ObjectAssetUpgradeState", b =>
+                {
+                    b.Property<string>("Name")
+                        .HasMaxLength(128)
+                        .HasColumnType("nvarchar(128)");
+
+                    b.Property<bool>("Completed")
+                        .HasColumnType("bit");
+
+                    b.Property<long>("ProcessedCount")
+                        .HasColumnType("bigint");
+
+                    b.HasKey("Name");
+
+                    b.ToTable("ObjectAssetUpgradeState", "osa");
+                });
+
+            modelBuilder.Entity("Elf.ObjectStorageAsset.Domain.Entities.ArchivedObjectAsset", b =>
+                {
+                    b.HasBaseType("Elf.ObjectStorageAsset.Domain.Entities.ObjectAsset");
+
+                    b.HasIndex("DeletedAtUtc", "Id");
+
+                    b.ToTable("ObjectAssetArchive", "osa");
+                });
+
+            modelBuilder.Entity("Elf.ObjectStorageAsset.Domain.Entities.PermanentObjectAsset", b =>
+                {
+                    b.HasBaseType("Elf.ObjectStorageAsset.Domain.Entities.ObjectAsset");
+
                     b.ToTable("ObjectAssets", "osa");
+                });
+
+            modelBuilder.Entity("Elf.ObjectStorageAsset.Domain.Entities.TemporaryObjectAsset", b =>
+                {
+                    b.HasBaseType("Elf.ObjectStorageAsset.Domain.Entities.ObjectAsset");
+
+                    b.ToTable("ObjectAssetTemporary", "osa");
                 });
 #pragma warning restore 612, 618
         }

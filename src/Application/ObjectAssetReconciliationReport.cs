@@ -14,6 +14,7 @@ public sealed class ObjectAssetReconciliationReport
     public IReadOnlyList<Guid> ExpiredTemporaryAssetIds { get; init; } = [];
 
     public IReadOnlyList<Guid> UnboundAssetIds { get; init; } = [];
+    public IReadOnlyList<Guid> ExternalOwnerAssetIds { get; init; } = [];
 
     public IReadOnlyList<Guid> ReferencedOnlyAssetIds { get; init; } = [];
 

@@ -31,26 +31,57 @@ internal sealed class ObjectAssetCoordinator(
             return hostChanges;
         }
 
-        foreach (var command in commands)
+        try
         {
-            switch (command)
+            await ReserveCommandAssetsAsync(commands, cancellationToken).ConfigureAwait(false);
+            foreach (var command in commands)
             {
-                case SetSingleObjectAssetCommand setSingle:
-                    await HandleSetSingleAsync(setSingle, cancellationToken).ConfigureAwait(false);
-                    break;
-                case AddObjectAssetCommand add:
-                    await HandleAddAsync(add, cancellationToken).ConfigureAwait(false);
-                    break;
-                case RemoveObjectAssetCommand remove:
-                    await HandleRemoveAsync(remove, cancellationToken).ConfigureAwait(false);
-                    break;
-                default:
-                    throw new InvalidOperationException(
-                        $"Unsupported object asset command '{command.GetType().FullName}'.");
+                switch (command)
+                {
+                    case SetSingleObjectAssetCommand setSingle:
+                        await HandleSetSingleAsync(setSingle, cancellationToken).ConfigureAwait(false);
+                        break;
+                    case AddObjectAssetCommand add:
+                        await HandleAddAsync(add, cancellationToken).ConfigureAwait(false);
+                        break;
+                    case RemoveObjectAssetCommand remove:
+                        await HandleRemoveAsync(remove, cancellationToken).ConfigureAwait(false);
+                        break;
+                    default:
+                        throw new InvalidOperationException(
+                            $"Unsupported object asset command '{command.GetType().FullName}'.");
+                }
+            }
+
+        }
+        finally
+        {
+            foreach (var command in commands)
+            {
+                if (command is SetSingleObjectAssetCommand set) await set.Content.DisposeAsync();
+                if (command is AddObjectAssetCommand add) await add.Content.DisposeAsync();
             }
         }
-
         return hostChanges;
+    }
+
+    private async Task ReserveCommandAssetsAsync(IReadOnlyList<IObjectAssetCommand> commands, CancellationToken ct)
+    {
+        if (!_objectStorageAssetDbContext.HasCallerTransaction) return;
+        var ids = new List<Guid>();
+        foreach (var command in commands)
+        {
+            if (command is RemoveObjectAssetCommand remove) ids.Add(remove.AssetId);
+            if (command is AddObjectAssetCommand add) ids.Add(add.Content.AssetId);
+            if (command is SetSingleObjectAssetCommand set)
+            {
+                ids.Add(set.Content.AssetId);
+                var key = ResolveOwnerKey(set.OwnerDefinition, set.Owner);
+                ids.AddRange(await _lifecycleManager.BuildOwnerSlotQuery(set.OwnerDefinition, key, set.Slot.Name)
+                    .AsNoTracking().Where(x => x.Status != ObjectAssetStatus.Deleted).Select(x => x.Id).ToListAsync(ct).ConfigureAwait(false));
+            }
+        }
+        await _objectStorageAssetDbContext.ReserveAssetsForUpdateAsync(ids, ct).ConfigureAwait(false);
     }
 
     private async Task HandleSetSingleAsync(
@@ -100,8 +131,8 @@ internal sealed class ObjectAssetCoordinator(
         RemoveObjectAssetCommand command,
         CancellationToken cancellationToken)
     {
-        var asset = await _objectStorageAssetDbContext.ObjectAssets
-            .FirstOrDefaultAsync(x => x.Id == command.AssetId, cancellationToken)
+        var asset = await _objectStorageAssetDbContext
+            .FindAssetAsync(command.AssetId, true, cancellationToken)
             .ConfigureAwait(false);
 
         if (asset is null || asset.Status == ObjectAssetStatus.Deleted)

@@ -11,7 +11,10 @@ internal sealed class ObjectAssetLifecycleManager(
     IObjectStorageProvider objectStorageProvider,
     IObjectStorageBucketResolver bucketResolver,
     ObjectStorageAssetRuntimeOptions options,
-    IObjectKeyStrategy objectKeyStrategy)
+    IObjectKeyStrategy objectKeyStrategy,
+    ObjectAssetIntegrityService integrity,
+    ObjectAssetNamingCatalog namingCatalog,
+    ObjectAssetStorageResolver storageResolver)
 {
     private readonly ObjectStorageAssetDbContext _objectStorageAssetDbContext = objectStorageAssetDbContext;
     private readonly IObjectStorageProvider _objectStorageProvider = objectStorageProvider;
@@ -49,6 +52,8 @@ internal sealed class ObjectAssetLifecycleManager(
             temporaryBindingId,
             temporaryBindingExpiresAtUtc);
 
+        asset = asset.CopyToLocation(ObjectAssetLocation.Temporary);
+
         await PersistAndUploadAsync(asset, content, cancellationToken).ConfigureAwait(false);
         return asset;
     }
@@ -66,12 +71,12 @@ internal sealed class ObjectAssetLifecycleManager(
             return;
         }
 
-        asset.MarkPendingDelete(DateTimeOffset.UtcNow);
+        asset.MarkPendingDelete(DateTimeOffset.UtcNow, physicallyDelete);
         await _objectStorageAssetDbContext.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
 
         try
         {
-            await _objectStorageProvider.DeleteObjectAsync(
+            await storageResolver.Resolve(asset.StorageAuthorityId).DeleteObjectAsync(
                     new ObjectStorageDeleteRequest
                     {
                         BucketName = asset.BucketName,
@@ -84,9 +89,10 @@ internal sealed class ObjectAssetLifecycleManager(
             asset.MarkDeleted(DateTimeOffset.UtcNow, physicallyDeleted: true);
             await _objectStorageAssetDbContext.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
         }
-        catch (Exception ex)
+        catch (Exception ex) when (!ObjectAssetSqlConcurrency.IsDeadlock(ex))
         {
             asset.MarkDeleteFailed(DateTimeOffset.UtcNow, ex.Message);
+            asset.ScheduleDeleteRetry(DateTimeOffset.UtcNow + _options.Maintenance.InitialRetryDelay, _options.Maintenance.MaxAttempts);
             await _objectStorageAssetDbContext.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
 
             if (rethrowOnFailure)
@@ -107,8 +113,19 @@ internal sealed class ObjectAssetLifecycleManager(
             throw new InvalidOperationException("Temporary binding finalization requires a non-empty binding id.");
         }
 
+        if (_objectStorageAssetDbContext.HasCallerTransaction)
+        {
+            var candidates = await BuildTemporaryBindingQuery(ownerDefinition, temporaryBindingId).AsNoTracking()
+                .Select(x => new { x.Id, x.SlotName, x.SlotMultiplicity }).ToListAsync(cancellationToken).ConfigureAwait(false);
+            var ids = candidates.Select(x => x.Id).ToList();
+            foreach (var slot in candidates.Where(x => x.SlotMultiplicity == ObjectAssetSlotMultiplicity.Single)
+                         .Select(x => x.SlotName).Distinct())
+                ids.AddRange(await BuildOwnerSlotQuery(ownerDefinition, normalizedOwnerKey, slot).AsNoTracking()
+                    .Where(x => x.Status != ObjectAssetStatus.Deleted).Select(x => x.Id).ToListAsync(cancellationToken).ConfigureAwait(false));
+            await _objectStorageAssetDbContext.ReserveAssetsForUpdateAsync(ids, cancellationToken).ConfigureAwait(false);
+        }
+
         var assets = await BuildTemporaryBindingQuery(ownerDefinition, temporaryBindingId)
-            .Where(x => x.Status == ObjectAssetStatus.Active)
             .OrderBy(x => x.CreatedAtUtc)
             .ToListAsync(cancellationToken)
             .ConfigureAwait(false);
@@ -123,7 +140,31 @@ internal sealed class ObjectAssetLifecycleManager(
             };
         }
 
-        foreach (var group in assets.GroupBy(x => new { x.SlotName, x.SlotMultiplicity }))
+        var effectiveUtcNow = DateTimeOffset.UtcNow;
+        var expiredAssetIds = assets
+            .Where(x => x.HasExpiredTemporaryBinding(effectiveUtcNow))
+            .Select(x => x.Id)
+            .ToArray();
+        if (expiredAssetIds.Length > 0)
+        {
+            throw new InvalidOperationException(
+                $"Temporary binding '{temporaryBindingId}' has expired and cannot be finalized. AssetIds={string.Join(", ", expiredAssetIds)}.");
+        }
+
+        var activeAssets = assets
+            .Where(x => x.Status == ObjectAssetStatus.Active)
+            .ToArray();
+        if (activeAssets.Length == 0)
+        {
+            return new ObjectAssetTemporaryBindingFinalizationResult
+            {
+                TemporaryBindingId = temporaryBindingId,
+                AssetIds = [],
+                FinalizedCount = 0
+            };
+        }
+
+        foreach (var group in activeAssets.GroupBy(x => new { x.SlotName, x.SlotMultiplicity }))
         {
             if (group.Key.SlotMultiplicity == ObjectAssetSlotMultiplicity.Single)
             {
@@ -157,8 +198,8 @@ internal sealed class ObjectAssetLifecycleManager(
         return new ObjectAssetTemporaryBindingFinalizationResult
         {
             TemporaryBindingId = temporaryBindingId,
-            AssetIds = assets.Select(x => x.Id).ToArray(),
-            FinalizedCount = assets.Count
+            AssetIds = activeAssets.Select(x => x.Id).ToArray(),
+            FinalizedCount = activeAssets.Length
         };
     }
 
@@ -167,8 +208,9 @@ internal sealed class ObjectAssetLifecycleManager(
         object normalizedOwnerKey,
         string slotName)
     {
-        var query = _objectStorageAssetDbContext.ObjectAssets.Where(
+        var query = _objectStorageAssetDbContext.PermanentAssets.Cast<ObjectAsset>().Where(
             x => x.OwnerType == ownerDefinition.OwnerType
+                 && x.BindingKind == ObjectAssetBindingKind.LocalOwner
                  && x.SlotName == slotName
                  && x.TemporaryBindingId == null);
 
@@ -192,7 +234,7 @@ internal sealed class ObjectAssetLifecycleManager(
         ObjectAssetOwnerDefinition ownerDefinition,
         Guid temporaryBindingId)
     {
-        return _objectStorageAssetDbContext.ObjectAssets.Where(x =>
+        return _objectStorageAssetDbContext.TemporaryAssets.Cast<ObjectAsset>().Where(x =>
             x.OwnerType == ownerDefinition.OwnerType
             && x.TemporaryBindingId == temporaryBindingId);
     }
@@ -211,23 +253,18 @@ internal sealed class ObjectAssetLifecycleManager(
         ObjectAssetSlot slot,
         ObjectAssetBufferedContent content)
     {
-        var assetId = Guid.NewGuid();
-        var utcNow = DateTimeOffset.UtcNow;
+        var assetId = content.AssetId;
+        var utcNow = content.CreatedAtUtc;
         var storageNamespace = _options.DefaultStorageNamespace.Trim();
 
-        return ObjectAsset.CreatePendingUpload(
+        var asset = ObjectAsset.CreatePendingUpload(
             assetId,
             ownerDefinition.OwnerType,
             slot.Name,
             slot.Multiplicity,
             _bucketResolver.GetDefaultBucketName(),
             storageNamespace,
-            _objectKeyStrategy.CreateObjectKey(new ObjectKeyContext(
-                assetId,
-                storageNamespace,
-                content.FileName,
-                content.Extension,
-                utcNow)),
+            content.ObjectKey,
             content.FileName,
             content.Extension,
             content.ContentType,
@@ -237,6 +274,9 @@ internal sealed class ObjectAssetLifecycleManager(
             content.ExpiresAtUtc,
             ObjectAssetOwnershipMode.Managed,
             content.MetadataJson);
+        asset.SetCreationProvenance(_options.LocalInstanceId, _options.StorageAuthorityId);
+        if (content.NamingProfile is { } profile) asset.SetNamingProvenance(profile.ProfileId, profile.Version, profile.DefinitionHash);
+        return asset;
     }
 
     private async Task PersistAndUploadAsync(
@@ -244,12 +284,14 @@ internal sealed class ObjectAssetLifecycleManager(
         ObjectAssetBufferedContent content,
         CancellationToken cancellationToken)
     {
+        if (content.NamingProfile is { } profile) await namingCatalog.RegisterAsync(profile, cancellationToken);
         _objectStorageAssetDbContext.ObjectAssets.Add(asset);
         await _objectStorageAssetDbContext.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
 
         try
         {
-            await using var stream = new MemoryStream(content.Bytes, writable: false);
+            var stream = content.Content;
+            stream.Position = 0;
             var putResult = await _objectStorageProvider.PutObjectAsync(
                     new ObjectStoragePutRequest
                     {
@@ -266,13 +308,26 @@ internal sealed class ObjectAssetLifecycleManager(
                     cancellationToken)
                 .ConfigureAwait(false);
 
+            asset.RecordStorageVersion(putResult.ETag, putResult.VersionId);
+            await content.Content.DisposeAsync();
+            if (_options.Integrity.Triggers.HasFlag(Sha256VerificationTriggers.AfterUpload))
+            {
+                await _objectStorageAssetDbContext.SaveChangesAsync(cancellationToken);
+                try
+                {
+                    var opened = await integrity.OpenAssetAsync(asset.Id, true, ObjectAssetReadScope.Any, cancellationToken)
+                        ?? throw new InvalidOperationException("Uploaded asset metadata is missing.");
+                    await opened.Content.DisposeAsync();
+                }
+                finally { await _objectStorageAssetDbContext.Entry(asset).ReloadAsync(cancellationToken); }
+            }
             asset.MarkUploadSucceeded(
                 DateTimeOffset.UtcNow,
                 putResult.ETag,
                 putResult.VersionId);
             await _objectStorageAssetDbContext.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
         }
-        catch (Exception ex)
+        catch (Exception ex) when (!ObjectAssetSqlConcurrency.IsDeadlock(ex))
         {
             asset.MarkUploadFailed(DateTimeOffset.UtcNow, ex.Message);
             await _objectStorageAssetDbContext.SaveChangesAsync(cancellationToken).ConfigureAwait(false);

@@ -1,18 +1,23 @@
 using System.Reflection;
+using System.Data;
+using Microsoft.Data.SqlClient;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Metadata;
+using Microsoft.EntityFrameworkCore.ChangeTracking;
 using Elf.ObjectStorageAsset.Domain.Entities;
+using Elf.ObjectStorageAsset.Domain.Enums;
 using Elf.ObjectStorageAsset.Helpers;
 using Elf.ObjectStorageAsset.Infrastructure.Persistence.Configurations;
 
 namespace Elf.ObjectStorageAsset.Infrastructure.Persistence;
 
-public sealed class ObjectStorageAssetDbContext : DbContext
+public sealed partial class ObjectStorageAssetDbContext : DbContext
 {
     public const string DefaultSchemaName = "osa";
     public const string MigrationsHistoryTableName = "__EFMigrationsHistory";
     private readonly string _schemaName;
+    private readonly Guid _primaryAuthorityId;
 
     public ObjectStorageAssetDbContext(
         DbContextOptions<ObjectStorageAssetDbContext> options,
@@ -22,13 +27,166 @@ public sealed class ObjectStorageAssetDbContext : DbContext
         _schemaName = schema?.Name ?? DefaultSchemaName;
     }
 
+    [Microsoft.Extensions.DependencyInjection.ActivatorUtilitiesConstructor]
+    public ObjectStorageAssetDbContext(DbContextOptions<ObjectStorageAssetDbContext> options,
+        ObjectStorageAssetSchema schema, Elf.ObjectStorageAsset.Application.ObjectStorageAssetRuntimeOptions? runtimeOptions = null)
+        : this(options, schema) => _primaryAuthorityId = runtimeOptions?.StorageAuthorityId ?? Guid.Empty;
+
     internal string SchemaName => _schemaName;
 
     public DbSet<ObjectAsset> ObjectAssets => Set<ObjectAsset>();
+    public DbSet<PermanentObjectAsset> PermanentAssets => Set<PermanentObjectAsset>();
+    public DbSet<TemporaryObjectAsset> TemporaryAssets => Set<TemporaryObjectAsset>();
+    public DbSet<ArchivedObjectAsset> ArchivedAssets => Set<ArchivedObjectAsset>();
+    public DbSet<ObjectAssetIdentity> AssetIdentities => Set<ObjectAssetIdentity>();
+    public DbSet<ObjectAssetNamingProfileRecord> NamingProfiles => Set<ObjectAssetNamingProfileRecord>();
+    public DbSet<ObjectAssetUpgradeState> UpgradeState => Set<ObjectAssetUpgradeState>();
+    public DbSet<ObjectAssetIntegrityEvidence> IntegrityEvidence => Set<ObjectAssetIntegrityEvidence>();
+    public DbSet<ObjectAssetMaintenanceState> MaintenanceState => Set<ObjectAssetMaintenanceState>();
+
+    // Only bracket-escaped schema identifiers are interpolated; all data values are SqlParameters.
+#pragma warning disable EF1002
+    /// <summary>Tracked lookups reserve mutation intent; use tracking=false for a metadata-only lookup.</summary>
+    public async Task<ObjectAsset?> FindAssetAsync(Guid assetId, bool tracking = true, CancellationToken cancellationToken = default)
+        => await FindAssetCoreAsync(assetId, tracking, tracking, cancellationToken).ConfigureAwait(false);
+
+    /// <summary>Loads a mutable asset while reserving its identity until the caller's transaction completes.</summary>
+    public Task<ObjectAsset?> FindAssetForUpdateAsync(Guid assetId, CancellationToken cancellationToken = default)
+    {
+        if (!HasCallerTransaction)
+            throw new InvalidOperationException("A mutation lookup requires an explicit OSA transaction.");
+        return FindAssetCoreAsync(assetId, true, true, cancellationToken);
+    }
+
+    private async Task<ObjectAsset?> FindAssetCoreAsync(Guid assetId, bool tracking, bool forUpdate, CancellationToken cancellationToken)
+    {
+        DrainIntegrityMirrors();
+        await using var transaction = !HasCallerTransaction
+            ? await Database.BeginTransactionAsync(IsolationLevel.RepeatableRead, cancellationToken) : null;
+        var table = "[" + _schemaName.Replace("]", "]]", StringComparison.Ordinal) + "].[ObjectAssetIdentity]";
+        // Tracked lookups are mutation lookups. The public metadata readers use tracking=false.
+        // Reserve U before loading the payload, avoiding competing S-to-X conversions in caller transactions.
+        var hint = forUpdate ? "UPDLOCK,HOLDLOCK" : "HOLDLOCK";
+        var identity = await AssetIdentities.FromSqlRaw($"SELECT * FROM {table} WITH ({hint}) WHERE [AssetId]=@id",
+            new SqlParameter("@id", assetId)).AsNoTracking().SingleOrDefaultAsync(cancellationToken).ConfigureAwait(false);
+        IQueryable<ObjectAsset> query = identity?.Location switch
+        {
+            ObjectAssetLocation.Main => PermanentAssets,
+            ObjectAssetLocation.Temporary => TemporaryAssets,
+            ObjectAssetLocation.Archive => ArchivedAssets,
+            _ => ObjectAssets.Where(_ => false)
+        };
+        if (!tracking) query = query.AsNoTracking();
+        var asset = identity is null ? null : await query.SingleOrDefaultAsync(x => x.Id == assetId, cancellationToken);
+        if (identity is not null && asset is null) throw new InvalidOperationException("Asset identity and payload location disagree.");
+        if (transaction is not null) await transaction.CommitAsync(cancellationToken);
+        return asset;
+    }
+
+    public override int SaveChanges(bool acceptAllChangesOnSuccess)
+    {
+        var plan = PrepareAssetSave(acceptAllChangesOnSuccess);
+        using var transaction = plan.Entries.Length > 0 ? BeginAssetSave(plan.Entries.Select(e => e.Entity.Id)) : null;
+        AddAssetIdentities(plan.Entries);
+        foreach (var entry in plan.Entries.Where(e => e.State == EntityState.Modified && e.Property(x => x.StorageAuthorityId).IsModified))
+        {
+            var identity = AssetIdentities.Find(entry.Entity.Id) ?? throw new InvalidOperationException("Asset identity is missing.");
+            identity.StorageAuthorityId = CanonicalAuthority(entry.Entity.StorageAuthorityId);
+        }
+        foreach (var entry in plan.Moves) entry.State = EntityState.Deleted;
+        var count = base.SaveChanges(acceptAllChangesOnSuccess);
+        foreach (var entry in plan.Moves)
+        {
+            var replacement = ReplaceMovedPayload(entry);
+            var identity = AssetIdentities.Find(replacement.Id) ?? throw new InvalidOperationException("Asset identity is missing during movement.");
+            identity.Location = Location(replacement);
+        }
+        if (plan.Moves.Length > 0) count += base.SaveChanges(acceptAllChangesOnSuccess);
+        transaction?.Commit();
+        return count;
+    }
+
+    public override async Task<int> SaveChangesAsync(bool acceptAllChangesOnSuccess, CancellationToken cancellationToken = default)
+    {
+        var plan = PrepareAssetSave(acceptAllChangesOnSuccess);
+        await using var transaction = plan.Entries.Length > 0
+            ? await BeginAssetSaveAsync(plan.Entries.Select(e => e.Entity.Id), cancellationToken).ConfigureAwait(false) : null;
+        AddAssetIdentities(plan.Entries);
+        foreach (var entry in plan.Entries.Where(e => e.State == EntityState.Modified && e.Property(x => x.StorageAuthorityId).IsModified))
+        {
+            var identity = await AssetIdentities.FindAsync([entry.Entity.Id], cancellationToken).ConfigureAwait(false)
+                ?? throw new InvalidOperationException("Asset identity is missing.");
+            identity.StorageAuthorityId = CanonicalAuthority(entry.Entity.StorageAuthorityId);
+        }
+        foreach (var entry in plan.Moves) entry.State = EntityState.Deleted;
+        var count = await base.SaveChangesAsync(acceptAllChangesOnSuccess, cancellationToken).ConfigureAwait(false);
+        foreach (var entry in plan.Moves)
+        {
+            var replacement = ReplaceMovedPayload(entry);
+            var identity = await AssetIdentities.FindAsync([replacement.Id], cancellationToken).ConfigureAwait(false)
+                ?? throw new InvalidOperationException("Asset identity is missing during movement.");
+            identity.Location = Location(replacement);
+        }
+        if (plan.Moves.Length > 0) count += await base.SaveChangesAsync(acceptAllChangesOnSuccess, cancellationToken).ConfigureAwait(false);
+        if (transaction is not null) await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+        return count;
+    }
+
+    private (EntityEntry<ObjectAsset>[] Entries, EntityEntry<ObjectAsset>[] Moves) PrepareAssetSave(bool acceptAllChangesOnSuccess)
+    {
+        DrainIntegrityMirrors();
+        ChangeTracker.DetectChanges();
+        foreach (var added in ChangeTracker.Entries<ObjectAsset>().Where(e => e.State == EntityState.Added
+            && e.Entity.GetType() != StorageType(e.Entity)).ToArray())
+        {
+            var replacement = added.Entity.CopyToLocation(Location(added.Entity));
+            added.State = EntityState.Detached;
+            ObjectAssets.Add(replacement);
+        }
+        var entries = ChangeTracker.Entries<ObjectAsset>().Where(e => e.State is EntityState.Added or EntityState.Modified).ToArray();
+        var moves = entries.Where(e => e.State == EntityState.Modified && e.Entity.GetType() != StorageType(e.Entity)).ToArray();
+        if (moves.Length > 0 && !acceptAllChangesOnSuccess)
+            throw new NotSupportedException("Lifecycle table moves require acceptAllChangesOnSuccess=true.");
+        return (entries, moves);
+    }
+
+    private void AddAssetIdentities(EntityEntry<ObjectAsset>[] entries)
+    {
+        foreach (var entry in entries.Where(e => e.State == EntityState.Added))
+            AssetIdentities.Add(new ObjectAssetIdentity
+            {
+                AssetId = entry.Entity.Id,
+                Location = Location(entry.Entity),
+                StorageAuthorityId = CanonicalAuthority(entry.Entity.StorageAuthorityId),
+                BucketName = entry.Entity.BucketName,
+                ObjectKey = entry.Entity.ObjectKey
+            });
+    }
+
+    private ObjectAsset ReplaceMovedPayload(EntityEntry<ObjectAsset> entry)
+    {
+        var replacement = entry.Entity.CopyToLocation(Location(entry.Entity));
+        entry.State = EntityState.Detached;
+        ObjectAssets.Add(replacement);
+        return replacement;
+    }
+#pragma warning restore EF1002
+
+    private static ObjectAssetLocation Location(ObjectAsset asset) => asset.Status == ObjectAssetStatus.Deleted
+        ? ObjectAssetLocation.Archive : asset.TemporaryBindingId.HasValue ? ObjectAssetLocation.Temporary : ObjectAssetLocation.Main;
+    private Guid CanonicalAuthority(Guid authorityId) => authorityId == _primaryAuthorityId ? Guid.Empty : authorityId;
+    private static Type StorageType(ObjectAsset asset) => Location(asset) switch
+    {
+        ObjectAssetLocation.Archive => typeof(ArchivedObjectAsset),
+        ObjectAssetLocation.Temporary => typeof(TemporaryObjectAsset),
+        _ => typeof(PermanentObjectAsset)
+    };
 
     protected override void OnConfiguring(DbContextOptionsBuilder optionsBuilder)
     {
         optionsBuilder.ReplaceService<IModelCacheKeyFactory, ObjectStorageAssetModelCacheKeyFactory>();
+        optionsBuilder.ReplaceService<Microsoft.EntityFrameworkCore.Migrations.IMigrationsSqlGenerator, ObjectAssetMigrationsSqlGenerator>();
+        optionsBuilder.AddInterceptors(IntegrityTransactionInterceptor, IntegrityConnectionInterceptor);
         base.OnConfiguring(optionsBuilder);
     }
 
@@ -36,6 +194,56 @@ public sealed class ObjectStorageAssetDbContext : DbContext
     {
         modelBuilder.HasDefaultSchema(_schemaName);
         modelBuilder.ApplyConfiguration(new ObjectAssetConfiguration());
+        modelBuilder.Entity<PermanentObjectAsset>().ToTable("ObjectAssets");
+        modelBuilder.Entity<TemporaryObjectAsset>().ToTable("ObjectAssetTemporary");
+        modelBuilder.Entity<ArchivedObjectAsset>().ToTable("ObjectAssetArchive");
+        modelBuilder.Entity<ArchivedObjectAsset>().HasIndex(x => new { x.DeletedAtUtc, x.Id });
+        modelBuilder.Entity<ObjectAssetIdentity>(b =>
+        {
+            b.ToTable("ObjectAssetIdentity");
+            b.HasKey(x => x.AssetId);
+            b.Property(x => x.AssetId).ValueGeneratedNever();
+            b.Property(x => x.BucketName).HasMaxLength(128).UseCollation("Latin1_General_100_BIN2");
+            b.Property(x => x.ObjectKey).HasMaxLength(512).UseCollation("Latin1_General_100_BIN2");
+            b.HasIndex(x => new { x.StorageAuthorityId, x.BucketName, x.ObjectKey }).IsUnique();
+        });
+        modelBuilder.Entity<ObjectAssetNamingProfileRecord>(b =>
+        {
+            b.ToTable("ObjectAssetNamingProfiles"); b.HasKey(x => new { x.ProfileId, x.Version });
+            b.Property(x => x.ProfileId).HasMaxLength(128); b.Property(x => x.DefinitionHash).HasMaxLength(64);
+            b.Property(x => x.Template).HasMaxLength(1024);
+        });
+        modelBuilder.Entity<ObjectAssetUpgradeState>(b =>
+        {
+            b.ToTable("ObjectAssetUpgradeState"); b.HasKey(x => x.Name); b.Property(x => x.Name).HasMaxLength(128);
+        });
+        modelBuilder.Entity<ObjectAssetIntegrityEvidence>(b =>
+        {
+            b.ToTable("ObjectAssetIntegrityEvidence");
+            b.HasKey(x => x.Id);
+            b.Property(x => x.Id).UseIdentityColumn();
+            b.Property(x => x.ExpectedHash).HasMaxLength(64);
+            b.Property(x => x.ActualHash).HasMaxLength(64);
+            b.Property(x => x.RequestedVersion).HasMaxLength(256);
+            b.Property(x => x.ObjectVersion).HasMaxLength(256);
+            b.Property(x => x.BucketName).HasMaxLength(128).UseCollation("Latin1_General_100_BIN2");
+            b.Property(x => x.ObjectKey).HasMaxLength(512).UseCollation("Latin1_General_100_BIN2");
+            b.Property(x => x.Error).HasMaxLength(1024);
+            b.Property(x => x.Resolution).HasMaxLength(32);
+            b.Property(x => x.SynchronizationError).HasMaxLength(128);
+            b.Property(x => x.NextAttemptAtUtc).HasDefaultValueSql("SYSUTCDATETIME()");
+            b.HasIndex(x => new { x.AssetId, x.AttemptedAtUtc, x.Id });
+            b.HasIndex(x => new { x.ResolvedAtUtc, x.Id });
+            b.HasIndex(x => new { x.NextAttemptAtUtc, x.Id }).HasFilter("[ResolvedAtUtc] IS NULL")
+                .IncludeProperties(x => new { x.AssetId, x.AttemptedAtUtc });
+            // Intentionally no FK: evidence must commit while the caller holds asset/identity locks,
+            // including an upload whose metadata may subsequently be rolled back.
+        });
+        modelBuilder.Entity<ObjectAssetMaintenanceState>(b =>
+        {
+            b.ToTable("ObjectAssetMaintenanceState"); b.HasKey(x => x.Name);
+            b.Property(x => x.Name).HasMaxLength(64);
+        });
         ConfigureEnumLabelComputedColumns(modelBuilder, _schemaName);
 
         base.OnModelCreating(modelBuilder);
