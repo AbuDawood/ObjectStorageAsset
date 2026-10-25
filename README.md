@@ -314,6 +314,64 @@ The SQL query bridge maps only permanent local-owner metadata and remains exclud
 migrations. Hosts with asset foreign keys should reference `ObjectAssetIdentityQueryModel.AssetId`,
 mapped to `ObjectAssetIdentity`, so references survive temporary binding and archival.
 
+## Missing content and restoration (v0.2.1)
+
+Confirmed absence of an object or requested version is independent of intentional deletion and SHA-256
+validation. Normal and archive reads throw `ObjectAssetContentMissingException` with a typed `Result`.
+The observation is durable even if the caller rolls back its transaction. Subsequent reads fail from
+the recorded observation without contacting storage. Network, authorization, bucket and configuration
+errors never mark content missing. Warning mode cannot return content that does not exist.
+
+Record retrieval exposes `record.Availability`; page items expose `ContentAvailability`. Existing and
+unchecked assets default to `Unknown`. A successful ordinary read does not write availability metadata.
+Reconciliation records newly confirmed missing objects and skips storage checks for known missing ones.
+Reconciliation remains an explicitly invoked operation, not a full-storage scan in the maintenance worker.
+
+```csharp
+try
+{
+    var content = await contentReader.OpenReadAsync(assetId, cancellationToken);
+    // A null result means the asset is absent or outside the active read scope.
+    // Dispose content.Content after use.
+}
+catch (ObjectAssetContentMissingException missing)
+{
+    // Return the host's chosen unavailable-file response using missing.Result.
+}
+
+// After restoring the object (or investigating a missing observation):
+await availabilityService.RecheckAsync(assetId, cancellationToken);
+// Optional retention policy: archive a confirmed missing asset, preserving its identity/references.
+await availabilityService.ArchiveMissingAsync(assetId, cancellationToken);
+```
+
+Resolve `availabilityService` as `IObjectAssetAvailabilityService`. Rechecks contact storage and update
+availability; they do not replace SHA verification or assert that restored bytes match the expected digest.
+Transient recheck failures preserve the previous observation. Archival is explicit, performs no storage
+delete, and retains ownership metadata. There is no automatic missing-content archival or recheck job.
+
+`ObjectAssetContentState` stores one current observation per asset, not an event history. Healthy reads
+create no rows; repeated missing reads create no new rows or storage requests. An indexed primary-key
+lookup is added to content retrieval; page availability is projected in the existing page SQL query.
+Observations are matched to authority, bucket, case-sensitive key/version, hash and length. Newer rechecks
+supersede older observations. The table has no asset FK and writes through a pooled, non-enlisted
+connection, avoiding a circular wait on caller-held asset/identity locks. Do not directly write this table
+inside a host transaction. It retains at most one row for each observed asset, including archived ones;
+maintenance does not purge a missing observation and accidentally make reads retry indefinitely.
+
+Custom storage providers should throw `ObjectStorageObjectNotFoundException` only for confirmed object
+or requested-version absence. `StatObjectAsync` returns null for that same condition and propagates other
+errors. MinIO uses typed exceptions/structured error codes; message substring matching is not used.
+
+## Upgrade from v0.2.0 to v0.2.1
+
+Apply `20261025230349_TrackContentAvailability` using the library context and its configured schema/history
+before starting v0.2.1 instances. It adds an empty `ObjectAssetContentState` table; existing assets, SHA
+results, object keys and ownership are unchanged. Use one deployment runner and a reviewed EF-generated
+idempotent SQL script. Startup auto-migration can apply this additive migration, but a separate deployment
+step is recommended for multiple pods. A downgrade is blocked when availability observations exist; use
+a verified backup or a reviewed forward change. Do not modify previously released migration IDs.
+
 ## Upgrade from v0.1.6
 
 The upgrade includes schema expansion, identity reservation, resumable data movement, validation,
@@ -333,7 +391,7 @@ must not write the same database during the split.
    excluded from host migrations. No host FK change is needed when the host has no such relationships.
 4. Apply `20261021052310_SplitAssetLifecycle`, `20261021052320_ValidateAssetLifecycle` and all subsequent
    index/deletion-intent migrations, `20261025183907_AddIntegrityEvidence` and
-   `20261025204842_ScaleIntegrityMaintenance`. The split will
+   `20261025204842_ScaleIntegrityMaintenance` and `20261025230349_TrackContentAvailability`. The split will
    reject remaining payload-table FKs. Temporary rows move to their table and deleted rows to archive;
    externally registered or ambiguous unbound records stay permanent. Counts and locations must pass
    validation before startup is allowed.

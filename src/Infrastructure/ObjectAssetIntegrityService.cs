@@ -13,7 +13,7 @@ namespace Elf.ObjectStorageAsset.Infrastructure;
 
 internal sealed class ObjectAssetIntegrityService(ObjectStorageAssetDbContext db, ObjectAssetStorageResolver storageResolver,
     ObjectAssetStager stager, ObjectStorageAssetRuntimeOptions options, ILogger<ObjectAssetIntegrityService> logger,
-    IServiceScopeFactory scopes, ObjectAssetIntegrityJournal journal)
+    IServiceScopeFactory scopes, ObjectAssetIntegrityJournal journal, ObjectAssetAvailabilityStore availability, TimeProvider clock)
     : IObjectAssetIntegrityService
 {
     public async Task<ObjectAssetIntegrityResult> VerifyAsync(Guid assetId, CancellationToken cancellationToken = default)
@@ -74,11 +74,14 @@ internal sealed class ObjectAssetIntegrityService(ObjectStorageAssetDbContext db
     internal async Task<(Stream Content, ObjectAssetIntegrityResult? Integrity)> OpenAsync(ObjectAsset asset, bool verify, CancellationToken ct,
         bool journalEvidence = false)
     {
-        var attempted = DateTimeOffset.UtcNow;
+        var known = await availability.GetAsync(asset, ct).ConfigureAwait(false);
+        if (known.Availability == ObjectAssetContentAvailability.Missing) throw new ObjectAssetContentMissingException(known);
+        var attempted = clock.GetUtcNow();
         var started = Stopwatch.GetTimestamp();
         var requestedVersion = asset.ProviderVersionId;
         Stream? content = null;
         ObjectAssetIntegrityResult? result = null;
+        ObjectAssetContentMissingException? missing = null;
         try
         {
             var downloaded = await stager.DownloadAsync(storageResolver.Resolve(asset.StorageAuthorityId), new ObjectStorageGetRequest
@@ -101,6 +104,16 @@ internal sealed class ObjectAssetIntegrityService(ObjectStorageAssetDbContext db
             if (verify) ObjectAssetIntegrityMetrics.VerificationDuration.Record(Stopwatch.GetElapsedTime(started).TotalMilliseconds,
                 new KeyValuePair<string, object?>("status", "Cancelled"));
             throw;
+        }
+        catch (ObjectStorageObjectNotFoundException ex)
+        {
+            if (content is not null) await content.DisposeAsync();
+            content = null;
+            var observation = await availability.RecordAsync(asset, ObjectAssetContentAvailability.Missing, attempted, ex.Reason, ct).ConfigureAwait(false);
+            missing = new ObjectAssetContentMissingException(observation, ex);
+            if (!verify) throw missing;
+            result = new(asset.Id, Sha256ValidationStatus.Failed, asset.Sha256, null, attempted, null,
+                asset.ProviderVersionId, ex.Reason.ToString());
         }
         catch (Exception ex)
         {
@@ -132,6 +145,7 @@ internal sealed class ObjectAssetIntegrityService(ObjectStorageAssetDbContext db
                         throw new InvalidOperationException("Asset content identity changed during validation.");
                 }
             }
+            if (missing is not null) throw missing;
             if (result.Status != Sha256ValidationStatus.Valid)
             {
                 logger.LogWarning("SHA-256 validation for asset {AssetId} returned {Status}: {Reason}", asset.Id, result.Status, result.Error);

@@ -12,6 +12,16 @@ namespace Elf.ObjectStorageAsset.Infrastructure.Persistence;
 
 public sealed partial class ObjectStorageAssetDbContext
 {
+    internal IQueryable<ObjectAssetContentState> ReadCommittedContentStates
+    {
+        get
+        {
+            var table = "[" + _schemaName.Replace("]", "]]", StringComparison.Ordinal) + "].[ObjectAssetContentState]";
+#pragma warning disable EF1002
+            return ContentStates.FromSqlRaw($"SELECT * FROM {table} WITH (READCOMMITTED)");
+#pragma warning restore EF1002
+        }
+    }
     internal IQueryable<ObjectAssetIntegrityEvidence> ReadCommittedIntegrityEvidence
     {
         get

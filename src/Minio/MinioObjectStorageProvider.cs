@@ -1,6 +1,9 @@
 using Minio;
+using Minio.DataModel;
 using Minio.DataModel.Args;
+using Minio.Exceptions;
 using Elf.ObjectStorageAsset.Application;
+using Elf.ObjectStorageAsset.Domain.Enums;
 
 namespace Elf.ObjectStorageAsset.Minio;
 
@@ -85,6 +88,11 @@ public sealed class MinioObjectStorageProvider : IObjectStorageProvider, IObject
                 VersionId = stat.VersionId ?? request.VersionId
             };
         }
+        catch (Exception ex) when (IsMissingObjectException(ex))
+        {
+            await buffer.DisposeAsync();
+            throw Missing(request, ex);
+        }
         catch { await buffer.DisposeAsync(); throw; }
     }
 
@@ -94,7 +102,9 @@ public sealed class MinioObjectStorageProvider : IObjectStorageProvider, IObject
         ArgumentNullException.ThrowIfNull(destination);
         var args = new GetObjectArgs().WithBucket(request.BucketName).WithObject(request.ObjectKey);
         if (!string.IsNullOrWhiteSpace(request.VersionId)) args = args.WithVersionId(request.VersionId);
-        var stat = await _client.GetObjectAsync(args.WithCallbackStream((stream, ct) => stream.CopyToAsync(destination, ct)), cancellationToken).ConfigureAwait(false);
+        ObjectStat stat;
+        try { stat = await _client.GetObjectAsync(args.WithCallbackStream((stream, ct) => stream.CopyToAsync(destination, ct)), cancellationToken).ConfigureAwait(false); }
+        catch (Exception ex) when (IsMissingObjectException(ex)) { throw Missing(request, ex); }
         return new ObjectStorageStatResult
         {
             BucketName = request.BucketName,
@@ -233,8 +243,12 @@ public sealed class MinioObjectStorageProvider : IObjectStorageProvider, IObject
 
     private static bool IsMissingObjectException(Exception exception)
     {
-        return exception.Message.Contains("NoSuchKey", StringComparison.OrdinalIgnoreCase)
-               || exception.Message.Contains("NoSuchBucket", StringComparison.OrdinalIgnoreCase)
-               || exception.Message.Contains("NotFound", StringComparison.OrdinalIgnoreCase);
+        return exception is ObjectNotFoundException
+            || exception is MinioException { Response.Code: "NoSuchKey" or "NoSuchObject" or "NoSuchVersion" };
     }
+
+    private static ObjectStorageObjectNotFoundException Missing(ObjectStorageGetRequest request, Exception exception)
+        => new(request.BucketName, request.ObjectKey, request.VersionId,
+            request.VersionId is not null || exception is MinioException { Response.Code: "NoSuchVersion" }
+                ? ObjectAssetMissingReason.VersionNotFound : ObjectAssetMissingReason.ObjectNotFound, exception);
 }

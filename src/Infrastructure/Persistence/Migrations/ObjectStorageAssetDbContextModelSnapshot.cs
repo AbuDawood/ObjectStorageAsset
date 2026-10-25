@@ -315,6 +315,67 @@ namespace Elf.ObjectStorageAsset.Infrastructure.Persistence.Migrations
                     b.UseTpcMappingStrategy();
                 });
 
+            modelBuilder.Entity("Elf.ObjectStorageAsset.Domain.Entities.ObjectAssetContentState", b =>
+                {
+                    b.Property<Guid>("AssetId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<int>("Availability")
+                        .HasColumnType("int");
+
+                    b.Property<string>("AvailabilityLabel")
+                        .ValueGeneratedOnAddOrUpdate()
+                        .HasMaxLength(9)
+                        .HasColumnType("nvarchar(9)")
+                        .HasComputedColumnSql("(CASE [Availability] WHEN 0 THEN N'Unknown' WHEN 1 THEN N'Available' WHEN 2 THEN N'Missing' ELSE NULL END)", true);
+
+                    b.Property<string>("BucketName")
+                        .IsRequired()
+                        .HasMaxLength(128)
+                        .HasColumnType("nvarchar(128)")
+                        .UseCollation("Latin1_General_100_BIN2");
+
+                    b.Property<DateTimeOffset>("CheckedAtUtc")
+                        .HasColumnType("datetimeoffset");
+
+                    b.Property<string>("ExpectedHash")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("nvarchar(64)");
+
+                    b.Property<long>("ExpectedSize")
+                        .HasColumnType("bigint");
+
+                    b.Property<int?>("MissingReason")
+                        .HasColumnType("int");
+
+                    b.Property<string>("MissingReasonLabel")
+                        .ValueGeneratedOnAddOrUpdate()
+                        .HasMaxLength(15)
+                        .HasColumnType("nvarchar(15)")
+                        .HasComputedColumnSql("(CASE [MissingReason] WHEN 1 THEN N'ObjectNotFound' WHEN 2 THEN N'VersionNotFound' ELSE NULL END)", true);
+
+                    b.Property<DateTimeOffset?>("MissingSinceUtc")
+                        .HasColumnType("datetimeoffset");
+
+                    b.Property<string>("ObjectKey")
+                        .IsRequired()
+                        .HasMaxLength(512)
+                        .HasColumnType("nvarchar(512)")
+                        .UseCollation("Latin1_General_100_BIN2");
+
+                    b.Property<string>("RequestedVersion")
+                        .HasMaxLength(256)
+                        .HasColumnType("nvarchar(256)");
+
+                    b.Property<Guid>("StorageAuthorityId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.HasKey("AssetId");
+
+                    b.ToTable("ObjectAssetContentState", "osa");
+                });
+
             modelBuilder.Entity("Elf.ObjectStorageAsset.Domain.Entities.ObjectAssetIdentity", b =>
                 {
                     b.Property<Guid>("AssetId")

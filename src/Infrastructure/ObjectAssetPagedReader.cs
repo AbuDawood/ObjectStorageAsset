@@ -9,7 +9,7 @@ namespace Elf.ObjectStorageAsset.Infrastructure;
 
 internal sealed class ObjectAssetPagedReader(ObjectStorageAssetDbContext db, IObjectAssetBindingCatalog catalog,
     ObjectAssetIntegrityService integrity, ObjectStorageAssetRuntimeOptions options, ObjectAssetStorageResolver storage,
-    ObjectAssetIntegrityJournal journal)
+    ObjectAssetIntegrityJournal journal, ObjectAssetAvailabilityStore availability, TimeProvider clock)
     : IObjectAssetPagedReader, IObjectAssetReconciliationReader
 {
     private Expression<Func<ObjectAsset, ObjectAssetPageItem>> Projection => x => new(
@@ -21,7 +21,15 @@ internal sealed class ObjectAssetPagedReader(ObjectStorageAssetDbContext db, IOb
             && e.ObjectKey == EF.Functions.Collate(x.ObjectKey, "Latin1_General_100_BIN2")
             && (!x.Sha256ValidationAttemptedAtUtc.HasValue || e.AttemptedAtUtc > x.Sha256ValidationAttemptedAtUtc))
             .OrderByDescending(e => e.AttemptedAtUtc).ThenByDescending(e => e.Id)
-            .Select(e => (Sha256ValidationStatus?)e.Status).FirstOrDefault() ?? x.Sha256ValidationStatus, x.DeletedAtUtc);
+            .Select(e => (Sha256ValidationStatus?)e.Status).FirstOrDefault() ?? x.Sha256ValidationStatus, x.DeletedAtUtc)
+        {
+            ContentAvailability = db.ReadCommittedContentStates.Where(s => s.AssetId == x.Id
+                && s.StorageAuthorityId == x.StorageAuthorityId && s.BucketName == EF.Functions.Collate(x.BucketName, "Latin1_General_100_BIN2")
+                && s.ObjectKey == EF.Functions.Collate(x.ObjectKey, "Latin1_General_100_BIN2")
+                && EF.Functions.Collate(s.RequestedVersion!, "Latin1_General_100_BIN2") == x.ProviderVersionId
+                && EF.Functions.Collate(s.ExpectedHash, "Latin1_General_100_BIN2") == x.Sha256 && s.ExpectedSize == x.SizeBytes)
+                .Select(s => (ObjectAssetContentAvailability?)s.Availability).FirstOrDefault() ?? ObjectAssetContentAvailability.Unknown
+        };
 
     public Task<ObjectAssetPage> GetOwnerPageAsync<T>(T owner, ObjectAssetSlot slot, ObjectAssetPageRequest? request = null, CancellationToken cancellationToken = default)
     {
@@ -96,11 +104,14 @@ internal sealed class ObjectAssetPagedReader(ObjectStorageAssetDbContext db, IOb
             asset.Sha256, asset.Sha256ValidationActualHash, asset.Sha256ValidationAttemptedAtUtc.Value,
             asset.Sha256ValidationCompletedAtUtc, asset.Sha256ValidationObjectVersion, asset.Sha256ValidationError) : null;
         validation = await journal.LatestAsync(asset, db, cancellationToken).ConfigureAwait(false) ?? validation;
+        var contentAvailability = await availability.GetAsync(asset, cancellationToken).ConfigureAwait(false);
         return new(new(asset.Id, asset.OriginalFileName, asset.ContentType, asset.SizeBytes, asset.CreatedAtUtc, asset.Status,
-                asset.BindingKind, validation?.Status ?? asset.Sha256ValidationStatus, asset.DeletedAtUtc), file,
+                asset.BindingKind, validation?.Status ?? asset.Sha256ValidationStatus, asset.DeletedAtUtc)
+                { ContentAvailability = contentAvailability.Availability }, file,
             new(asset.StorageAuthorityId, asset.BucketName, asset.ObjectKey, asset.ProviderVersionId), validation, asset.TemporaryBindingId,
             asset.OriginInstanceId.HasValue ? new(asset.OriginInstanceId.Value, asset.OriginAssetId!.Value) : null,
-            asset.ExternalOwnerInstanceId.HasValue ? new(asset.ExternalOwnerInstanceId.Value, asset.ExternalOwnerType!, asset.ExternalOwnerKeyKind!.Value, asset.ExternalOwnerKey!) : null);
+            asset.ExternalOwnerInstanceId.HasValue ? new(asset.ExternalOwnerInstanceId.Value, asset.ExternalOwnerType!, asset.ExternalOwnerKeyKind!.Value, asset.ExternalOwnerKey!) : null)
+            { Availability = contentAvailability };
     }
 
     public async Task<ObjectAssetContentResult?> OpenArchivedReadAsync(Guid assetId, CancellationToken cancellationToken = default)
@@ -135,15 +146,30 @@ internal sealed class ObjectAssetPagedReader(ObjectStorageAssetDbContext db, IOb
                 x.BucketName,
                 x.ObjectKey,
                 x.ProviderVersionId,
-                x.TemporaryBindingExpiresAtUtc
+                x.TemporaryBindingExpiresAtUtc,
+                Content = new ObjectAssetContentIdentity(x.Id, x.StorageAuthorityId, x.BucketName, x.ObjectKey,
+                    x.ProviderVersionId, x.Sha256, x.SizeBytes)
             }).ToArrayAsync(cancellationToken);
         var items = new ObjectAssetReconciliationItem[Math.Min(rows.Length, request.PageSize)];
         await Parallel.ForEachAsync(Enumerable.Range(0, items.Length), new ParallelOptions
         { MaxDegreeOfParallelism = options.Maintenance.ProviderConcurrency, CancellationToken = cancellationToken }, async (i, ct) =>
         {
             var row = rows[i];
-            var missing = row.Status == ObjectAssetStatus.Active && await storage.Resolve(row.StorageAuthorityId).StatObjectAsync(
-                new ObjectStorageStatRequest { BucketName = row.BucketName, ObjectKey = row.ObjectKey, VersionId = row.ProviderVersionId }, ct) is null;
+            var missing = false;
+            if (row.Status == ObjectAssetStatus.Active)
+            {
+                // Use the same detection path as explicit checks, but avoid re-probing known missing content.
+                var state = await availability.GetAsync(row.Content, ct).ConfigureAwait(false);
+                missing = state.Availability == ObjectAssetContentAvailability.Missing;
+                if (!missing)
+                {
+                    var started = clock.GetUtcNow();
+                    missing = await storage.Resolve(row.StorageAuthorityId).StatObjectAsync(
+                        new ObjectStorageStatRequest { BucketName = row.BucketName, ObjectKey = row.ObjectKey, VersionId = row.ProviderVersionId }, ct) is null;
+                    if (missing) await availability.RecordAsync(row.Content, ObjectAssetContentAvailability.Missing, started,
+                        row.ProviderVersionId is null ? ObjectAssetMissingReason.ObjectNotFound : ObjectAssetMissingReason.VersionNotFound, ct).ConfigureAwait(false);
+                }
+            }
             items[i] = new(row.Id, row.Status, row.BindingKind, missing, row.BindingKind == ObjectAssetBindingKind.Temporary
                 && row.TemporaryBindingExpiresAtUtc <= DateTimeOffset.UtcNow);
         });

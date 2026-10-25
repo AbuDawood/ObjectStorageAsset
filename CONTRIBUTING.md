@@ -63,6 +63,15 @@ For every slice:
 
 ## 7) Persistence Rules
 
+Content availability is separate from lifecycle and SHA validation. Confirmed object/version absence
+uses `ObjectStorageObjectNotFoundException`; transient, authorization and missing-bucket failures must
+propagate. Persist only one current availability observation per asset and bind it to exact content
+identity. Do not add an asset FK or write availability inside a caller transaction: missing detection
+must survive rollback without waiting on that caller's asset locks. Normal reads short circuit known
+missing content; restoration is an explicit recheck, and missing archival is explicit and preserves
+stable references. Validate both provider download paths, serializable caller locks, concurrent/older
+observations, schema-aware migrations and real-MinIO deletion/restoration in the existing E2E runners.
+
 - The persistence root is `ObjectAsset`.
 - Migrations live under `src/Infrastructure/Persistence/Migrations`.
 - Do not hardcode `dbo`; always use the configured schema.

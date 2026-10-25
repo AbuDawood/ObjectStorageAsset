@@ -6,11 +6,17 @@ public sealed record ObjectAssetCursor(DateTimeOffset Timestamp, Guid AssetId);
 public sealed record ObjectAssetPageRequest(int PageSize = 100, ObjectAssetCursor? After = null);
 public sealed record ObjectAssetPageItem(Guid AssetId, string FileName, string ContentType, long SizeBytes,
     DateTimeOffset CreatedAtUtc, ObjectAssetStatus Status, ObjectAssetBindingKind BindingKind,
-    Sha256ValidationStatus Sha256ValidationStatus, DateTimeOffset? DeletedAtUtc);
+    Sha256ValidationStatus Sha256ValidationStatus, DateTimeOffset? DeletedAtUtc)
+{
+    public ObjectAssetContentAvailability ContentAvailability { get; init; }
+}
 public sealed record ObjectAssetPage(IReadOnlyList<ObjectAssetPageItem> Items, ObjectAssetCursor? Next);
 public sealed record ObjectAssetRecord(ObjectAssetPageItem Asset, ObjectAssetDescriptor File,
     ObjectAssetStorageReference Storage, ObjectAssetIntegrityResult? Integrity, Guid? TemporaryBindingId,
-    ObjectAssetOriginReference? Origin, ObjectAssetOwnerReference? ExternalOwner);
+    ObjectAssetOriginReference? Origin, ObjectAssetOwnerReference? ExternalOwner)
+{
+    public ObjectAssetAvailabilityResult? Availability { get; init; }
+}
 
 public interface IObjectAssetPagedReader
 {

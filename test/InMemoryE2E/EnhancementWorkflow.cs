@@ -60,6 +60,21 @@ public static partial class Program
             options.Integrity.Triggers = Sha256VerificationTriggers.ExplicitOnly;
         }
         Require((await reader.GetRecordAsync(temporary.AssetId))!.Integrity?.Status == Sha256ValidationStatus.Mismatch, "Persisted mismatch");
+        storage.RemoveObject(key);
+        try { await contentReader.OpenReadAsync(temporary.AssetId); throw new InvalidOperationException("Missing content was exposed."); }
+        catch (ObjectAssetContentMissingException) { }
+        var reads = storage.GetCount;
+        try { await contentReader.OpenReadAsync(temporary.AssetId); throw new InvalidOperationException("Missing content was exposed."); }
+        catch (ObjectAssetContentMissingException) { }
+        Require(storage.GetCount == reads, "Known missing content short circuits storage");
+        Require((await reader.GetRecordAsync(temporary.AssetId))!.Availability?.Availability == ObjectAssetContentAvailability.Missing, "Persisted availability");
+        await using (var restored = CreateStream("enhanced-e2e"))
+            await storage.PutObjectAsync(new() { BucketName = bound.BucketName, ObjectKey = key, Content = restored,
+                ContentLength = restored.Length, ContentType = "text/plain" });
+        Require((await services.GetRequiredService<IObjectAssetAvailabilityService>().RecheckAsync(temporary.AssetId))!.Availability == ObjectAssetContentAvailability.Available,
+            "Explicit restoration recheck");
+        var restoredRead = await contentReader.OpenReadAsync(temporary.AssetId);
+        await restoredRead!.Content.DisposeAsync();
         var sessions = services.GetRequiredService<IObjectAssetSessionFactory>();
         await sessions.For(order).RemoveAsync(temporary.AssetId);
         await services.GetRequiredService<IObjectAssetCoordinator>().SaveChangesWithAssetsAsync(host);
@@ -67,7 +82,7 @@ public static partial class Program
         Require(await db.ArchivedAssets.AnyAsync(x => x.Id == temporary.AssetId), "Archive retrieval");
         Require((await reader.GetArchivePageAsync()).Items.Any(x => x.AssetId == temporary.AssetId), "Archive page");
         Require((await contentReader.OpenReadAsync(temporary.AssetId)) is null, "Normal reader excludes deleted asset");
-        Console.WriteLine("Enhanced E2E passed: naming versions, temporary binding, SHA warning/guard with caller locks and durable rollback evidence, table moves and archive queries.");
+        Console.WriteLine("Enhanced E2E passed: naming versions, temporary binding, SHA warning/guard with caller locks, durable evidence, missing-content short circuit/restoration, table moves and archive queries.");
     }
 
     private static void Require(bool condition, string description)

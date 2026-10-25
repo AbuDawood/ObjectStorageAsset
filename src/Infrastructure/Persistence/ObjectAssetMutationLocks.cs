@@ -24,7 +24,7 @@ public sealed partial class ObjectStorageAssetDbContext
     internal Task ReserveAssetsInCallerTransactionAsync(IEnumerable<Guid> assetIds, CancellationToken ct)
         => !HasCallerTransaction ? Task.CompletedTask : ReserveAssetsForUpdateAsync(assetIds, ct);
 
-    private async Task<IDbContextTransaction?> BeginAssetSaveAsync(IEnumerable<Guid> assetIds, CancellationToken ct)
+    internal async Task<IDbContextTransaction?> BeginAssetSaveAsync(IEnumerable<Guid> assetIds, CancellationToken ct)
     {
         var ids = assetIds.Distinct().ToArray();
         if (HasCallerTransaction)

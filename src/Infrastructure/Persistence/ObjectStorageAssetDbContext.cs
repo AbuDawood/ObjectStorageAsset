@@ -43,6 +43,7 @@ public sealed partial class ObjectStorageAssetDbContext : DbContext
     public DbSet<ObjectAssetUpgradeState> UpgradeState => Set<ObjectAssetUpgradeState>();
     public DbSet<ObjectAssetIntegrityEvidence> IntegrityEvidence => Set<ObjectAssetIntegrityEvidence>();
     public DbSet<ObjectAssetMaintenanceState> MaintenanceState => Set<ObjectAssetMaintenanceState>();
+    public DbSet<ObjectAssetContentState> ContentStates => Set<ObjectAssetContentState>();
 
     // Only bracket-escaped schema identifiers are interpolated; all data values are SqlParameters.
 #pragma warning disable EF1002
@@ -238,6 +239,17 @@ public sealed partial class ObjectStorageAssetDbContext : DbContext
                 .IncludeProperties(x => new { x.AssetId, x.AttemptedAtUtc });
             // Intentionally no FK: evidence must commit while the caller holds asset/identity locks,
             // including an upload whose metadata may subsequently be rolled back.
+        });
+        modelBuilder.Entity<ObjectAssetContentState>(b =>
+        {
+            b.ToTable("ObjectAssetContentState"); b.HasKey(x => x.AssetId);
+            b.Property(x => x.AssetId).ValueGeneratedNever();
+            b.Property(x => x.BucketName).HasMaxLength(128).UseCollation("Latin1_General_100_BIN2");
+            b.Property(x => x.ObjectKey).HasMaxLength(512).UseCollation("Latin1_General_100_BIN2");
+            b.Property(x => x.RequestedVersion).HasMaxLength(256);
+            b.Property(x => x.ExpectedHash).HasMaxLength(64);
+            // No FK or asset write: detection must commit while a caller holds identity/payload locks.
+            // A primary key bounds storage to one current observation per asset; healthy reads never insert.
         });
         modelBuilder.Entity<ObjectAssetMaintenanceState>(b =>
         {

@@ -16,6 +16,8 @@ public sealed partial class WorkflowTests
     private const string V016Migration = "20260308065818_AddObjectAssetCustomMetadata";
     private const string ReserveMigration = "20261021052301_ReserveAssetIdentities";
     private const string SplitMigration = "20261021052310_SplitAssetLifecycle";
+    private const string EvidenceMigration = "20261025183907_AddIntegrityEvidence";
+    private const string ThroughputMigration = "20261025204842_ScaleIntegrityMaintenance";
 
     [TestCase("osa")]
     [TestCase("osa'through]put")]
@@ -32,7 +34,7 @@ public sealed partial class WorkflowTests
             VALUES (NEWID(),'00000000-0000-0000-0000-000000000000',N'b',N'key',@hash,4,2,SYSDATETIMEOFFSET(),N'retained');
             """, new SqlParameter("@hash", new string('a', 64)));
 #pragma warning restore EF1002
-        await db.GetService<IMigrator>().MigrateAsync();
+        await db.GetService<IMigrator>().MigrateAsync(ThroughputMigration);
         var evidence = await db.IntegrityEvidence.AsNoTracking().SingleAsync();
         evidence.Status.Should().Be(Sha256ValidationStatus.Mismatch); evidence.Error.Should().Be("retained");
         evidence.RetryCount.Should().Be(0); evidence.SynchronizationError.Should().BeNull();
@@ -40,7 +42,7 @@ public sealed partial class WorkflowTests
         (await db.MaintenanceState.CountAsync()).Should().Be(0);
         Func<Task> down = () => db.GetService<IMigrator>().MigrateAsync(previous);
         await down.Should().ThrowAsync<SqlException>().WithMessage("*evidence*blocked*");
-        (await db.Database.GetPendingMigrationsAsync()).Should().BeEmpty();
+        (await db.Database.GetAppliedMigrationsAsync()).Last().Should().Be(ThroughputMigration);
         (await db.IntegrityEvidence.CountAsync()).Should().Be(1);
     }
 
@@ -60,7 +62,7 @@ public sealed partial class WorkflowTests
             new string('b', 64), null, "existing-evidence");
         db.Add(asset); await db.SaveChangesAsync();
         var version = asset.RowVersion.ToArray();
-        var migrator = db.GetService<IMigrator>(); await migrator.MigrateAsync();
+        var migrator = db.GetService<IMigrator>(); await migrator.MigrateAsync(EvidenceMigration);
         (await db.IntegrityEvidence.CountAsync()).Should().Be(0);
         var preserved = await db.PermanentAssets.AsNoTracking().SingleAsync();
         preserved.Sha256ValidationStatus.Should().Be(Sha256ValidationStatus.Mismatch);
@@ -69,13 +71,13 @@ public sealed partial class WorkflowTests
         Func<Task> down = () => migrator.MigrateAsync(previous);
         await down.Should().ThrowAsync<SqlException>().WithMessage("*downgrade*blocked*");
         (await db.IntegrityEvidence.CountAsync()).Should().Be(0);
-        (await db.Database.GetPendingMigrationsAsync()).Should().BeEmpty();
+        (await db.Database.GetAppliedMigrationsAsync()).Last().Should().Be(EvidenceMigration);
     }
 
     [Test]
     public async Task IntegrityEvidenceDowngrade_ShouldPreserveEvidenceEvenWithoutAssetRows()
     {
-        await using var fixture = await SqlServerFixture.CreateAsync(useMigrations: true);
+        await using var fixture = await SqlServerFixture.CreateAsync(useMigrations: true, targetMigration: ThroughputMigration);
         using var scope = fixture.RootProvider.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<ObjectStorageAssetDbContext>();
         db.IntegrityEvidence.Add(new Elf.ObjectStorageAsset.Domain.Entities.ObjectAssetIntegrityEvidence
@@ -87,7 +89,7 @@ public sealed partial class WorkflowTests
         Func<Task> down = () => db.GetService<IMigrator>().MigrateAsync("20261021055114_RememberPhysicalDeleteIntent");
         await down.Should().ThrowAsync<SqlException>().WithMessage("*evidence*blocked*");
         (await db.IntegrityEvidence.CountAsync()).Should().Be(1);
-        (await db.Database.GetPendingMigrationsAsync()).Should().BeEmpty();
+        (await db.Database.GetAppliedMigrationsAsync()).Last().Should().Be(ThroughputMigration);
     }
 
     [Test]
@@ -162,7 +164,9 @@ public sealed partial class WorkflowTests
         await downgrade.Should().ThrowAsync<SqlException>().WithMessage("*downgrade*blocked*");
         (await db.ObjectAssets.CountAsync()).Should().Be(6);
         (await db.PermanentAssets.AsNoTracking().SingleAsync(x => x.Id == local)).PhysicalDeletionRequested.Should().BeTrue();
-        (await db.Database.GetPendingMigrationsAsync()).Should().BeEmpty();
+        // The later empty availability table can safely be removed before the legacy populated-data guard stops Down.
+        (await db.Database.GetAppliedMigrationsAsync()).Last().Should().Be(ThroughputMigration);
+        (await db.Database.GetPendingMigrationsAsync()).Should().Equal("20261025230349_TrackContentAvailability");
     }
 
     [Test]

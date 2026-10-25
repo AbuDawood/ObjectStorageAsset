@@ -267,7 +267,34 @@ public static class Program
         var valid = await services.GetRequiredService<IObjectAssetIntegrityService>().VerifyAsync(assetId);
         if (valid.Status != Domain.Enums.Sha256ValidationStatus.Valid)
             throw new InvalidOperationException("Live E2E restored content did not verify.");
-        Console.WriteLine("Real-storage E2E passed: after-upload/read verification, caller-write-lock tamper rejection, rollback-surviving evidence and recovery.");
+        await storage.DeleteObjectAsync(new() { BucketName = descriptor.Bucket, ObjectKey = descriptor.ObjectKey });
+        using var missingTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+        await using (var missingTransaction = await database.Database.BeginTransactionAsync(missingTimeout.Token))
+        {
+            var asset = (await database.FindAssetForUpdateAsync(assetId, missingTimeout.Token))!;
+            asset.MarkUploadSucceeded(DateTimeOffset.UtcNow, asset.ETag, asset.ProviderVersionId);
+            await database.SaveChangesAsync(missingTimeout.Token);
+            for (var i = 0; i < 2; i++)
+            {
+                try
+                {
+                    await services.GetRequiredService<IObjectAssetContentReader>().OpenReadAsync(assetId, missingTimeout.Token);
+                    throw new InvalidOperationException("Live E2E did not report missing content.");
+                }
+                catch (ObjectAssetContentMissingException) { }
+            }
+            await missingTransaction.RollbackAsync(missingTimeout.Token);
+        }
+        database.ChangeTracker.Clear();
+        var availability = services.GetRequiredService<IObjectAssetAvailabilityService>();
+        if ((await availability.GetAsync(assetId))?.Availability != Domain.Enums.ObjectAssetContentAvailability.Missing)
+            throw new InvalidOperationException("Live E2E missing observation did not survive rollback.");
+        await PutAsync("live-invoice");
+        if ((await availability.RecheckAsync(assetId))?.Availability != Domain.Enums.ObjectAssetContentAvailability.Available)
+            throw new InvalidOperationException("Live E2E explicit restoration failed.");
+        var restored = await services.GetRequiredService<IObjectAssetContentReader>().OpenReadAsync(assetId);
+        await restored!.Content.DisposeAsync();
+        Console.WriteLine("Real-storage E2E passed: integrity guards, caller-write-lock handling, rollback-surviving evidence/availability, missing-content detection and explicit restoration.");
     }
 
     private static async Task CleanupObjectsAsync(ServiceProvider rootProvider)

@@ -2,6 +2,20 @@
 
 All notable changes to this project are documented in this file.
 
+## 0.2.1
+
+### Added
+- Typed missing-content errors and persisted availability, separate from lifecycle and SHA-256 status.
+- One current observation per asset, transaction-independent detection and short-circuited repeated reads.
+- Explicit storage rechecks/restoration and optional archival of confirmed missing assets while retaining stable references.
+- Availability in record/page retrieval and persisted missing detection during reconciliation.
+- Additive `TrackContentAvailability` migration with a populated-data downgrade guard.
+- SQL transaction, concurrency, provider classification, upgrade and real-MinIO E2E regressions.
+
+### Fixed
+- MinIO absence classification uses typed exceptions/structured codes; network, authorization and missing-bucket errors propagate.
+- Warning-mode reads of absent bytes report a typed missing-content error instead of treating absence as a hash mismatch.
+
 ## 0.2.0
 
 ### Added

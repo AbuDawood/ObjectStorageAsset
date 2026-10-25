@@ -15,7 +15,10 @@ public sealed class InMemoryMinioLikeObjectStorageProvider : IObjectStorageProvi
 
     public bool ThrowOnDelete { get; set; }
     public bool ThrowOnGet { get; set; }
+    public bool ThrowOnStat { get; set; }
     public bool CorruptOnGet { get; set; }
+    private int _getCount;
+    public int GetCount => Volatile.Read(ref _getCount);
 
     public IReadOnlyCollection<string> ObjectKeys => _objects.Values.Select(x => x.ObjectKey).ToArray();
 
@@ -72,11 +75,12 @@ public sealed class InMemoryMinioLikeObjectStorageProvider : IObjectStorageProvi
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(request);
+        Interlocked.Increment(ref _getCount);
         if (ThrowOnGet) throw new IOException("Injected read failure");
 
         if (!_objects.TryGetValue(BuildCompositeKey(request.BucketName, request.ObjectKey), out var storedObject))
         {
-            throw new InvalidOperationException("object not found");
+            throw new ObjectStorageObjectNotFoundException(request.BucketName, request.ObjectKey, request.VersionId);
         }
 
         var contentBytes = storedObject.Bytes;
@@ -101,6 +105,7 @@ public sealed class InMemoryMinioLikeObjectStorageProvider : IObjectStorageProvi
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(request);
+        if (ThrowOnStat) throw new IOException("Injected stat failure");
 
         if (!_objects.TryGetValue(BuildCompositeKey(request.BucketName, request.ObjectKey), out var storedObject))
         {

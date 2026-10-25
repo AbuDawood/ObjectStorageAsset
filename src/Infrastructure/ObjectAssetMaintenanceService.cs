@@ -12,7 +12,7 @@ internal sealed class ObjectAssetMaintenanceService(
     ObjectStorageAssetRuntimeOptions runtimeOptions,
     ObjectAssetLifecycleManager lifecycleManager,
     IObjectAssetMaintenanceLock guard,
-    ObjectAssetStorageResolver storageResolver, ObjectAssetIntegrityJournal journal)
+    ObjectAssetStorageResolver storageResolver, ObjectAssetIntegrityJournal journal, ObjectAssetAvailabilityStore availability, TimeProvider clock)
     : IObjectAssetMaintenanceService, IObjectAssetMaintenanceTasks
 {
     private readonly ObjectStorageAssetDbContext _objectStorageAssetDbContext = objectStorageAssetDbContext;
@@ -185,13 +185,18 @@ internal sealed class ObjectAssetMaintenanceService(
                 x.StorageAuthorityId,
                 x.BucketName,
                 x.ObjectKey,
-                x.ProviderVersionId))
+                x.ProviderVersionId, x.Sha256, x.SizeBytes))
             .ToArrayAsync(cancellationToken)
             .ConfigureAwait(false);
 
         var missingActiveAssetIds = new List<Guid>();
         foreach (var activeAsset in activeAssets)
         {
+            var identity = new ObjectAssetContentIdentity(activeAsset.Id, activeAsset.StorageAuthorityId, activeAsset.BucketName,
+                activeAsset.ObjectKey, activeAsset.ProviderVersionId, activeAsset.Sha256, activeAsset.SizeBytes);
+            if ((await availability.GetAsync(identity, cancellationToken).ConfigureAwait(false)).Availability == ObjectAssetContentAvailability.Missing)
+            { missingActiveAssetIds.Add(activeAsset.Id); continue; }
+            var started = clock.GetUtcNow();
             var stat = await storageResolver.Resolve(activeAsset.StorageAuthorityId).StatObjectAsync(
                     new ObjectStorageStatRequest
                     {
@@ -205,6 +210,9 @@ internal sealed class ObjectAssetMaintenanceService(
             if (stat is null)
             {
                 missingActiveAssetIds.Add(activeAsset.Id);
+                await availability.RecordAsync(identity, ObjectAssetContentAvailability.Missing, started,
+                    activeAsset.ProviderVersionId is null ? ObjectAssetMissingReason.ObjectNotFound : ObjectAssetMissingReason.VersionNotFound,
+                    cancellationToken).ConfigureAwait(false);
             }
         }
 
@@ -227,5 +235,5 @@ internal sealed class ObjectAssetMaintenanceService(
         Guid StorageAuthorityId,
         string BucketName,
         string ObjectKey,
-        string? ProviderVersionId);
+        string? ProviderVersionId, string Sha256, long SizeBytes);
 }
