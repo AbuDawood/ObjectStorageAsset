@@ -67,7 +67,7 @@ internal sealed class ObjectAssetCoordinator(
 
     private async Task ReserveCommandAssetsAsync(IReadOnlyList<IObjectAssetCommand> commands, CancellationToken ct)
     {
-        if (_objectStorageAssetDbContext.Database.CurrentTransaction is null) return;
+        if (!_objectStorageAssetDbContext.HasCallerTransaction) return;
         var ids = new List<Guid>();
         foreach (var command in commands)
         {

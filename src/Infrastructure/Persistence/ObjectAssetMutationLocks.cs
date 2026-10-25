@@ -3,6 +3,7 @@ using System.Text.Json;
 using Microsoft.Data.SqlClient;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Storage;
+using System.Transactions;
 
 namespace Elf.ObjectStorageAsset.Infrastructure.Persistence;
 
@@ -15,18 +16,18 @@ public sealed partial class ObjectStorageAssetDbContext
     public Task ReserveAssetsForUpdateAsync(IEnumerable<Guid> assetIds, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(assetIds);
-        if (Database.CurrentTransaction is null)
+        if (!HasCallerTransaction)
             throw new InvalidOperationException("Asset reservations require an explicit OSA transaction.");
         return LockAssetIdentitiesAsync(assetIds, exclusive: false, cancellationToken);
     }
 
     internal Task ReserveAssetsInCallerTransactionAsync(IEnumerable<Guid> assetIds, CancellationToken ct)
-        => Database.CurrentTransaction is null ? Task.CompletedTask : ReserveAssetsForUpdateAsync(assetIds, ct);
+        => !HasCallerTransaction ? Task.CompletedTask : ReserveAssetsForUpdateAsync(assetIds, ct);
 
     private async Task<IDbContextTransaction?> BeginAssetSaveAsync(IEnumerable<Guid> assetIds, CancellationToken ct)
     {
         var ids = assetIds.Distinct().ToArray();
-        if (Database.CurrentTransaction is not null)
+        if (HasCallerTransaction)
         {
             await LockAssetIdentitiesAsync(ids, exclusive: true, ct).ConfigureAwait(false);
             return null; // The caller owns commit, rollback and any whole-transaction retry.
@@ -57,12 +58,51 @@ public sealed partial class ObjectStorageAssetDbContext
     {
         var ids = assetIds.Distinct().ToArray();
         if (ids.Length == 0) return;
+        var sql = AssetLockSql(exclusive);
+#pragma warning disable EF1002
+        await Database.ExecuteSqlRawAsync(sql,
+            [new SqlParameter("@assetIds", SqlDbType.NVarChar, -1) { Value = JsonSerializer.Serialize(ids) }], ct).ConfigureAwait(false);
+#pragma warning restore EF1002
+    }
+
+    internal bool HasCallerTransaction => Database.CurrentTransaction is not null
+        || System.Transactions.Transaction.Current is not null || Database.GetEnlistedTransaction() is not null;
+
+    internal IDbContextTransaction? BeginAssetSave(IEnumerable<Guid> assetIds)
+    {
+        var ids = assetIds.Distinct().ToArray();
+        if (HasCallerTransaction) { LockAssetIdentities(ids, true); return null; }
+        for (var attempt = 0; ; attempt++)
+        {
+            var transaction = Database.BeginTransaction();
+            try { LockAssetIdentities(ids, true); return transaction; }
+            catch (Exception ex) when (ObjectAssetSqlConcurrency.IsDeadlock(ex) && attempt < 2)
+            {
+                transaction.Dispose();
+                Thread.Sleep(25 * (attempt + 1) + Random.Shared.Next(25));
+            }
+            catch { transaction.Dispose(); throw; }
+        }
+    }
+
+    private void LockAssetIdentities(IEnumerable<Guid> assetIds, bool exclusive)
+    {
+        var ids = assetIds.Distinct().ToArray();
+        if (ids.Length == 0) return;
+#pragma warning disable EF1002
+        Database.ExecuteSqlRaw(AssetLockSql(exclusive),
+            new SqlParameter("@assetIds", SqlDbType.NVarChar, -1) { Value = JsonSerializer.Serialize(ids) });
+#pragma warning restore EF1002
+    }
+
+    private string AssetLockSql(bool exclusive)
+    {
         var table = "[" + _schemaName.Replace("]", "]]", StringComparison.Ordinal) + "].[ObjectAssetIdentity]";
         var hint = exclusive ? "XLOCK,HOLDLOCK" : "UPDLOCK,HOLDLOCK";
         // ORDER BY controls cursor fetch order; each fetch locks one indexed identity before the next.
         // Sorting an IN-list alone does not establish SQL Server's lock acquisition order.
         // One parameterized roundtrip also avoids a client roundtrip per asset and the 2100-parameter limit.
-        var sql = $$"""
+        return $$"""
             SET NOCOUNT ON;
             DECLARE @assetId uniqueidentifier, @lockedId uniqueidentifier;
             DECLARE osa_asset_locks CURSOR LOCAL FAST_FORWARD FOR
@@ -77,10 +117,6 @@ public sealed partial class ObjectStorageAssetDbContext
             CLOSE osa_asset_locks;
             DEALLOCATE osa_asset_locks;
             """;
-#pragma warning disable EF1002
-        await Database.ExecuteSqlRawAsync(sql,
-            [new SqlParameter("@assetIds", SqlDbType.NVarChar, -1) { Value = JsonSerializer.Serialize(ids) }], ct).ConfigureAwait(false);
-#pragma warning restore EF1002
     }
 }
 

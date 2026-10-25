@@ -40,6 +40,10 @@ public static partial class Program
         await warning.Content.DisposeAsync();
         Require(warning.Integrity?.Status == Sha256ValidationStatus.Mismatch, "Warning continues and reports mismatch");
         options.Integrity.FailureBehavior = Sha256FailureBehavior.Guard;
+        await using var transaction = await db.Database.BeginTransactionAsync();
+        var locked = (await db.FindAssetForUpdateAsync(temporary.AssetId))!;
+        locked.MarkUploadSucceeded(DateTimeOffset.UtcNow, locked.ETag, locked.ProviderVersionId);
+        await db.SaveChangesAsync();
         try
         {
             var rejected = await contentReader.OpenReadAsync(temporary.AssetId);
@@ -49,6 +53,8 @@ public static partial class Program
         catch (ObjectAssetIntegrityException ex) { Require(ex.Result.Status == Sha256ValidationStatus.Mismatch, "Guard mismatch"); }
         finally
         {
+            await transaction.RollbackAsync();
+            db.ChangeTracker.Clear(); // Begin the next EF unit with fresh state after rolling back a saved write.
             storage.CorruptOnGet = false;
             options.Integrity.FailureBehavior = Sha256FailureBehavior.Warning;
             options.Integrity.Triggers = Sha256VerificationTriggers.ExplicitOnly;
@@ -61,7 +67,7 @@ public static partial class Program
         Require(await db.ArchivedAssets.AnyAsync(x => x.Id == temporary.AssetId), "Archive retrieval");
         Require((await reader.GetArchivePageAsync()).Items.Any(x => x.AssetId == temporary.AssetId), "Archive page");
         Require((await contentReader.OpenReadAsync(temporary.AssetId)) is null, "Normal reader excludes deleted asset");
-        Console.WriteLine("Enhanced E2E passed: naming versions, temporary binding, SHA warning/guard, table moves and archive queries.");
+        Console.WriteLine("Enhanced E2E passed: naming versions, temporary binding, SHA warning/guard with caller locks and durable rollback evidence, table moves and archive queries.");
     }
 
     private static void Require(bool condition, string description)

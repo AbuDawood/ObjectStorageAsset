@@ -243,6 +243,11 @@ public static class Program
             });
         }
         await PutAsync("tampered-live-content");
+        var database = services.GetRequiredService<ObjectStorageAssetDbContext>();
+        await using var transaction = await database.Database.BeginTransactionAsync();
+        var locked = (await database.FindAssetForUpdateAsync(assetId))!;
+        locked.MarkUploadSucceeded(DateTimeOffset.UtcNow, locked.ETag, locked.ProviderVersionId);
+        await database.SaveChangesAsync();
         try
         {
             var content = await services.GetRequiredService<IObjectAssetContentReader>().OpenReadAsync(assetId);
@@ -254,12 +259,15 @@ public static class Program
             var row = await services.GetRequiredService<IObjectAssetPagedReader>().GetRecordAsync(assetId);
             if (row?.Integrity?.Status != Domain.Enums.Sha256ValidationStatus.Mismatch)
                 throw new InvalidOperationException("Live E2E mismatch evidence was not persisted.");
+            var evidence = await database.IntegrityEvidence.AsNoTracking().SingleAsync(e => e.AssetId == assetId);
+            if (evidence.Status != Domain.Enums.Sha256ValidationStatus.Mismatch)
+                throw new InvalidOperationException("Live E2E caller-transaction evidence was not durable.");
         }
-        finally { await PutAsync("live-invoice"); }
+        finally { await transaction.RollbackAsync(); await PutAsync("live-invoice"); }
         var valid = await services.GetRequiredService<IObjectAssetIntegrityService>().VerifyAsync(assetId);
         if (valid.Status != Domain.Enums.Sha256ValidationStatus.Valid)
             throw new InvalidOperationException("Live E2E restored content did not verify.");
-        Console.WriteLine("Real-storage E2E passed: after-upload/read verification, tamper rejection and persisted recovery.");
+        Console.WriteLine("Real-storage E2E passed: after-upload/read verification, caller-write-lock tamper rejection, rollback-surviving evidence and recovery.");
     }
 
     private static async Task CleanupObjectsAsync(ServiceProvider rootProvider)

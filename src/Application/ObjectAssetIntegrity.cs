@@ -10,6 +10,7 @@ public sealed class ObjectAssetIntegrityOptions
 {
     public Sha256FailureBehavior FailureBehavior { get; set; } = Sha256FailureBehavior.Warning;
     public Sha256VerificationTriggers Triggers { get; set; } = Sha256VerificationTriggers.ExplicitOnly;
+    public TimeSpan EvidenceRetention { get; set; } = TimeSpan.FromDays(30);
 }
 
 public sealed record ObjectAssetIntegrityResult(Guid AssetId, Sha256ValidationStatus Status,

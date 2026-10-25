@@ -10,6 +10,7 @@ public sealed class ObjectAssetMaintenanceOptions
     public TimeSpan? ExpiryInterval { get; set; }
     public TimeSpan? PendingDeleteInterval { get; set; }
     public TimeSpan? RetryInterval { get; set; }
+    public TimeSpan? IntegrityEvidenceInterval { get; set; }
 }
 
 public sealed class ObjectAssetBufferOptions

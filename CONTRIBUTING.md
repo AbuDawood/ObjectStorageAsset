@@ -176,6 +176,15 @@ testing; point it at a build of tag `v0.1.6` (`2d323d419c1d3e380a36efb0d88685eb4
 
 ## Release validation
 
+Synchronous saves must use synchronous provider APIs, including commit/disposal and evidence-completion
+handling. Share pure lifecycle planning with async saving; never wrap async saving with GetResult.
+Exercise a non-pumping single-thread synchronization context in regression tests.
+
+Transactional SHA verification must use the caller's metadata view and independently persist its
+evidence without an asset FK or a lookup against caller-locked rows. Preserve unsaved caller changes,
+rollback-resistant evidence, Warning/Guard semantics, ambient transactions and post-commit rowversion
+usability. Keep synchronization and retention bounded and test pending-evidence visibility without a worker.
+
 Mutation paths must reserve identity write intent before payload writes. Keep multi-asset acquisition
 in SQL key order, including a caller transaction's known replacement/finalization set. Pure reads use
 untracked lookups. Retest competing same-asset moves, reversed batches, pending-write/read races and

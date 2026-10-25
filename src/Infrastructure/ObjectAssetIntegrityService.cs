@@ -12,7 +12,7 @@ namespace Elf.ObjectStorageAsset.Infrastructure;
 
 internal sealed class ObjectAssetIntegrityService(ObjectStorageAssetDbContext db, ObjectAssetStorageResolver storageResolver,
     ObjectAssetStager stager, ObjectStorageAssetRuntimeOptions options, ILogger<ObjectAssetIntegrityService> logger,
-    IServiceScopeFactory scopes)
+    IServiceScopeFactory scopes, ObjectAssetIntegrityJournal journal)
     : IObjectAssetIntegrityService
 {
     public async Task<ObjectAssetIntegrityResult> VerifyAsync(Guid assetId, CancellationToken cancellationToken = default)
@@ -30,19 +30,26 @@ internal sealed class ObjectAssetIntegrityService(ObjectStorageAssetDbContext db
 
     internal async Task<OpenedAsset?> OpenAssetAsync(Guid assetId, bool verify, ObjectAssetReadScope readScope, CancellationToken ct)
     {
+        if (db.HasCallerTransaction)
+        {
+            var local = db.ChangeTracker.Entries<ObjectAsset>().FirstOrDefault(e => e.Entity.Id == assetId)?.Entity
+                ?? await db.FindAssetAsync(assetId, true, ct).ConfigureAwait(false);
+            if (!InScope(local, readScope)) return null;
+            var content = await OpenAsync(local!, verify, ct, journalEvidence: verify).ConfigureAwait(false);
+            return new(local!, content.Content, content.Integrity);
+        }
         using var suppression = new TransactionScope(TransactionScopeOption.Suppress, TransactionScopeAsyncFlowOption.Enabled);
         using var scope = scopes.CreateScope();
         var context = scope.ServiceProvider.GetRequiredService<ObjectStorageAssetDbContext>();
         var asset = await context.FindAssetAsync(assetId, true, ct);
-        if (asset is null || readScope == ObjectAssetReadScope.Active && asset.Status != ObjectAssetStatus.Active
-            || readScope == ObjectAssetReadScope.Archive && (asset is not ArchivedObjectAsset || asset.PhysicalDeletedAtUtc.HasValue))
+        if (!InScope(asset, readScope))
             return null;
         var core = scope.ServiceProvider.GetRequiredService<ObjectAssetIntegrityService>();
         OpenedAsset? result = null;
         try
         {
-            var opened = await core.OpenAsync(asset, verify, ct);
-            result = new(asset, opened.Content, opened.Integrity);
+            var opened = await core.OpenAsync(asset!, verify, ct);
+            result = new(asset!, opened.Content, opened.Integrity);
             var tracked = db.ChangeTracker.Entries<ObjectAsset>().FirstOrDefault(x => x.Entity.Id == assetId && x.State == EntityState.Unchanged);
             if (verify && tracked is not null && db.Database.CurrentTransaction is null)
                 await tracked.ReloadAsync(ct);
@@ -59,7 +66,12 @@ internal sealed class ObjectAssetIntegrityService(ObjectStorageAssetDbContext db
         }
     }
 
-    internal async Task<(Stream Content, ObjectAssetIntegrityResult? Integrity)> OpenAsync(ObjectAsset asset, bool verify, CancellationToken ct)
+    private static bool InScope(ObjectAsset? asset, ObjectAssetReadScope scope) => asset is not null
+        && (scope != ObjectAssetReadScope.Active || asset.Status == ObjectAssetStatus.Active)
+        && (scope != ObjectAssetReadScope.Archive || asset is ArchivedObjectAsset && !asset.PhysicalDeletedAtUtc.HasValue);
+
+    internal async Task<(Stream Content, ObjectAssetIntegrityResult? Integrity)> OpenAsync(ObjectAsset asset, bool verify, CancellationToken ct,
+        bool journalEvidence = false)
     {
         var attempted = DateTimeOffset.UtcNow;
         var requestedVersion = asset.ProviderVersionId;
@@ -97,7 +109,12 @@ internal sealed class ObjectAssetIntegrityService(ObjectStorageAssetDbContext db
 
         try
         {
-            for (var attempt = 0; ; attempt++)
+            if (journalEvidence)
+            {
+                var evidence = await journal.AppendAsync(asset, result!, ct).ConfigureAwait(false);
+                db.RegisterIntegrityEvidence(journal, evidence.Id);
+            }
+            else for (var attempt = 0; ; attempt++)
             {
                 asset.RecordSha256Validation(result!.Status, result.AttemptedAtUtc, result.CompletedAtUtc,
                     result.ActualHash, result.ObjectVersion, result.Error);

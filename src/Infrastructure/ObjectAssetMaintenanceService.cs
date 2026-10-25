@@ -12,7 +12,7 @@ internal sealed class ObjectAssetMaintenanceService(
     ObjectStorageAssetRuntimeOptions runtimeOptions,
     ObjectAssetLifecycleManager lifecycleManager,
     IObjectAssetMaintenanceLock guard,
-    ObjectAssetStorageResolver storageResolver)
+    ObjectAssetStorageResolver storageResolver, ObjectAssetIntegrityJournal journal)
     : IObjectAssetMaintenanceService, IObjectAssetMaintenanceTasks
 {
     private readonly ObjectStorageAssetDbContext _objectStorageAssetDbContext = objectStorageAssetDbContext;
@@ -27,9 +27,12 @@ internal sealed class ObjectAssetMaintenanceService(
     public Task<int> RetryDeleteFailuresAsync(CancellationToken cancellationToken = default)
         => RunLockedAsync(ct => RetryCoreAsync(ct), cancellationToken);
 
+    public Task<int> SynchronizeIntegrityEvidenceAsync(CancellationToken cancellationToken = default)
+        => journal.MaintainAsync(cancellationToken);
+
     private async Task<int> RunLockedAsync(Func<CancellationToken, Task<int>> action, CancellationToken ct)
     {
-        if (_objectStorageAssetDbContext.Database.CurrentTransaction is not null)
+        if (_objectStorageAssetDbContext.HasCallerTransaction)
             throw new InvalidOperationException("Maintenance must execute outside a caller-owned OSA transaction.");
         await using var lease = await guard.TryAcquireAsync(ct);
         return lease is null ? 0 : await action(lease.CancellationToken);

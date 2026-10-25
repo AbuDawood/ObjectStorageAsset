@@ -22,6 +22,9 @@ All notable changes to this project are documented in this file.
 - Release tags must match the package version and identify a commit already merged into `main`; assemblies and packages use the same version.
 
 ### Fixed
+- Use genuine synchronous saving with shared lifecycle planning, preserving synchronous EF behavior under single-thread synchronization contexts.
+- Verify within caller-owned transactions without waiting on their asset locks; retain independently committed SHA evidence across rollback and expose pending results through existing read APIs.
+- Synchronize evidence automatically after transaction completion and recover/prune it through bounded maintenance work, preserving content-version checks and unsaved caller changes.
 - Reserve write intent for tracked identity lookups and acquire identity locks in SQL key order before payload writes, avoiding the reproduced shared-to-exclusive lock conversion deadlock.
 - Cover pending-delete writes as well as archive moves; reserve known multi-asset mutation sets before caller-transaction work.
 - Bound pre-write lock acquisition retries without replaying provider operations or hiding caller-owned transaction deadlocks.

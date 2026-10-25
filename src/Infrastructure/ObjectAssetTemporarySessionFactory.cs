@@ -76,7 +76,7 @@ internal sealed class ObjectAssetTemporarySessionFactory(
                     TemporaryBindingId,
                     slot.Name)
                 .Where(x => x.Status != ObjectAssetStatus.Deleted);
-            if (_objectStorageAssetDbContext.Database.CurrentTransaction is not null)
+            if (_objectStorageAssetDbContext.HasCallerTransaction)
             {
                 var ids = await existingQuery.AsNoTracking().Select(x => x.Id).ToListAsync(cancellationToken).ConfigureAwait(false);
                 ids.Add(buffered.AssetId);

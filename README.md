@@ -218,6 +218,32 @@ complete staged stream before exposing any bytes. On-read and after-upload verif
 I/O; enable them deliberately. Explicit verification in Warning mode returns a `Failed` result for
 unavailable content; Guard throws `ObjectAssetIntegrityException` with its result.
 
+Verification inside an explicit OSA transaction or ambient `TransactionScope` uses the caller's
+metadata view, including its uncommitted uploads. Evidence is committed independently to
+`ObjectAssetIntegrityEvidence`, which intentionally has no asset foreign key. The evidence write
+does not read or update the caller-locked asset row. Verification never saves unrelated pending
+caller changes. Guard still rejects invalid content before returning bytes or accepting the upload;
+Warning retains its existing behavior. Normal API calls and defaults remain unchanged.
+
+Transaction-completion and connection-close handling synchronize applicable evidence into the
+asset's validation fields after commit or rollback. Results are matched by asset, expected hash,
+size, storage identity and requested version; older results cannot replace newer evidence. Evidence
+for a rolled-back new asset remains available for investigation even though its asset row is absent.
+The record and paged APIs expose pending evidence automatically. Direct SQL consumers of the cached
+asset columns can observe a delay after interrupted synchronization.
+
+The existing maintenance worker also processes pending evidence and prunes resolved evidence in
+bounded batches, skipping locked assets immediately. It does not download or rehash objects.
+`options.Integrity.EvidenceRetention` defaults to 30 days after resolution, and
+`options.Maintenance.IntegrityEvidenceInterval` defaults to the shared maintenance interval.
+Completion synchronization works with maintenance disabled; enable the designated maintenance pod
+for periodic crash recovery and retention. This feature requires migration
+`20261025183907_AddIntegrityEvidence` in addition to the lifecycle upgrade below.
+
+Both synchronous `SaveChanges()` and asynchronous `SaveChangesAsync()` use their corresponding
+database APIs and share lifecycle planning. Synchronous saving does not block on an asynchronous
+implementation, so it also works under a single-thread synchronization context.
+
 Staging defaults to a 4 MiB per-stream memory threshold, 16 MiB aggregate retained memory, four
 concurrent staging operations, 1,024 retained streams, 5 GiB per file and 20 GiB aggregate retained
 bytes. Configure these through `options.Buffering`, including a writable temporary directory. Large
@@ -292,7 +318,7 @@ must not write the same database during the split.
    drops those relationships and recreates them against `ObjectAssetIdentity.AssetId`. Keep OSA tables
    excluded from host migrations. No host FK change is needed when the host has no such relationships.
 4. Apply `20261021052310_SplitAssetLifecycle`, `20261021052320_ValidateAssetLifecycle` and all subsequent
-   index/deletion-intent migrations. The split will
+   index/deletion-intent migrations and `20261025183907_AddIntegrityEvidence`. The split will
    reject remaining payload-table FKs. Temporary rows move to their table and deleted rows to archive;
    externally registered or ambiguous unbound records stay permanent. Counts and locations must pass
    validation before startup is allowed.
@@ -586,7 +612,7 @@ across pods. A contender skips the cycle. The lock uses a dedicated non-pooled c
 released when that connection closes. This is a maintenance lock; normal asset writes use transactions,
 unique constraints and rowversion checks.
 
-Expiry, pending-delete and retry-delete tasks execute sequentially, each in a fresh DI scope. A task
+Expiry, pending-delete, retry-delete and integrity-evidence tasks execute sequentially, each in a fresh DI scope. A task
 failure is logged and does not block subsequent tasks; cancellation stops the cycle. Each task handles
 at most one bounded batch per cycle. Defaults are 200 records, four concurrent provider operations,
 ten delete attempts, and exponential backoff with jitter from one minute up to twelve hours. Exhausted

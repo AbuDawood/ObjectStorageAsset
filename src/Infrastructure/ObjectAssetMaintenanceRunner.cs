@@ -7,8 +7,8 @@ namespace Elf.ObjectStorageAsset.Infrastructure;
 internal sealed class ObjectAssetMaintenanceRunner(IServiceScopeFactory scopes, IObjectAssetMaintenanceLock guard,
     ObjectStorageAssetRuntimeOptions options, ILogger<ObjectAssetMaintenanceRunner> logger, TimeProvider clock) : IObjectAssetMaintenanceRunner
 {
-    private readonly DateTimeOffset[] _next = new DateTimeOffset[3];
-    private readonly int[] _failures = new int[3];
+    private readonly DateTimeOffset[] _next = new DateTimeOffset[4];
+    private readonly int[] _failures = new int[4];
     private readonly SemaphoreSlim _localGate = new(1);
     public async Task RunOnceAsync(CancellationToken cancellationToken = default)
     {
@@ -22,13 +22,14 @@ internal sealed class ObjectAssetMaintenanceRunner(IServiceScopeFactory scopes, 
             var cycleStartedAtUtc = clock.GetUtcNow();
             var intervals = new[] { options.Maintenance.ExpiryInterval ?? options.MaintenanceInterval,
             options.Maintenance.PendingDeleteInterval ?? options.MaintenanceInterval,
-            options.Maintenance.RetryInterval ?? options.MaintenanceInterval };
-            for (var i = 0; i < 3; i++)
+            options.Maintenance.RetryInterval ?? options.MaintenanceInterval,
+            options.Maintenance.IntegrityEvidenceInterval ?? options.MaintenanceInterval };
+            for (var i = 0; i < 4; i++)
             {
                 ct.ThrowIfCancellationRequested();
                 if (_next[i] > clock.GetUtcNow()) continue;
                 var started = clock.GetUtcNow();
-                var name = new[] { "expiry", "pending-delete", "retry-delete" }[i];
+                var name = new[] { "expiry", "pending-delete", "retry-delete", "integrity-evidence" }[i];
                 var tag = new KeyValuePair<string, object?>("task", name);
                 try
                 {
@@ -38,7 +39,8 @@ internal sealed class ObjectAssetMaintenanceRunner(IServiceScopeFactory scopes, 
                     {
                         0 => await service.ExpireCoreAsync(null, ct),
                         1 => await service.PendingCoreAsync(ct),
-                        _ => await service.RetryCoreAsync(ct, cycleStartedAtUtc)
+                        2 => await service.RetryCoreAsync(ct, cycleStartedAtUtc),
+                        _ => await service.SynchronizeIntegrityEvidenceAsync(ct)
                     };
                     _next[i] = clock.GetUtcNow() + intervals[i];
                     _failures[i] = 0;
@@ -68,4 +70,5 @@ internal interface IObjectAssetMaintenanceTasks
     Task<int> ExpireCoreAsync(DateTimeOffset? utcNow, CancellationToken cancellationToken);
     Task<int> PendingCoreAsync(CancellationToken cancellationToken);
     Task<int> RetryCoreAsync(CancellationToken cancellationToken, DateTimeOffset? failedBefore = null);
+    Task<int> SynchronizeIntegrityEvidenceAsync(CancellationToken cancellationToken);
 }

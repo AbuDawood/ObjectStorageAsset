@@ -352,6 +352,87 @@ namespace Elf.ObjectStorageAsset.Infrastructure.Persistence.Migrations
                     b.ToTable("ObjectAssetIdentity", "osa");
                 });
 
+            modelBuilder.Entity("Elf.ObjectStorageAsset.Domain.Entities.ObjectAssetIntegrityEvidence", b =>
+                {
+                    b.Property<long>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint");
+
+                    SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<long>("Id"));
+
+                    b.Property<string>("ActualHash")
+                        .HasMaxLength(64)
+                        .HasColumnType("nvarchar(64)");
+
+                    b.Property<Guid>("AssetId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<DateTimeOffset>("AttemptedAtUtc")
+                        .HasColumnType("datetimeoffset");
+
+                    b.Property<string>("BucketName")
+                        .IsRequired()
+                        .HasMaxLength(128)
+                        .HasColumnType("nvarchar(128)")
+                        .UseCollation("Latin1_General_100_BIN2");
+
+                    b.Property<DateTimeOffset?>("CompletedAtUtc")
+                        .HasColumnType("datetimeoffset");
+
+                    b.Property<string>("Error")
+                        .HasMaxLength(1024)
+                        .HasColumnType("nvarchar(1024)");
+
+                    b.Property<string>("ExpectedHash")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("nvarchar(64)");
+
+                    b.Property<long>("ExpectedSize")
+                        .HasColumnType("bigint");
+
+                    b.Property<string>("ObjectKey")
+                        .IsRequired()
+                        .HasMaxLength(512)
+                        .HasColumnType("nvarchar(512)")
+                        .UseCollation("Latin1_General_100_BIN2");
+
+                    b.Property<string>("ObjectVersion")
+                        .HasMaxLength(256)
+                        .HasColumnType("nvarchar(256)");
+
+                    b.Property<string>("RequestedVersion")
+                        .HasMaxLength(256)
+                        .HasColumnType("nvarchar(256)");
+
+                    b.Property<string>("Resolution")
+                        .HasMaxLength(32)
+                        .HasColumnType("nvarchar(32)");
+
+                    b.Property<DateTimeOffset?>("ResolvedAtUtc")
+                        .HasColumnType("datetimeoffset");
+
+                    b.Property<int>("Status")
+                        .HasColumnType("int");
+
+                    b.Property<string>("StatusLabel")
+                        .ValueGeneratedOnAddOrUpdate()
+                        .HasMaxLength(10)
+                        .HasColumnType("nvarchar(10)")
+                        .HasComputedColumnSql("(CASE [Status] WHEN 0 THEN N'NotChecked' WHEN 1 THEN N'Valid' WHEN 2 THEN N'Mismatch' WHEN 3 THEN N'Failed' ELSE NULL END)", true);
+
+                    b.Property<Guid>("StorageAuthorityId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("ResolvedAtUtc", "Id");
+
+                    b.HasIndex("AssetId", "AttemptedAtUtc", "Id");
+
+                    b.ToTable("ObjectAssetIntegrityEvidence", "osa");
+                });
+
             modelBuilder.Entity("Elf.ObjectStorageAsset.Domain.Entities.ObjectAssetNamingProfileRecord", b =>
                 {
                     b.Property<string>("ProfileId")

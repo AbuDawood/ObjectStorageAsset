@@ -113,7 +113,7 @@ internal sealed class ObjectAssetLifecycleManager(
             throw new InvalidOperationException("Temporary binding finalization requires a non-empty binding id.");
         }
 
-        if (_objectStorageAssetDbContext.Database.CurrentTransaction is not null)
+        if (_objectStorageAssetDbContext.HasCallerTransaction)
         {
             var candidates = await BuildTemporaryBindingQuery(ownerDefinition, temporaryBindingId).AsNoTracking()
                 .Select(x => new { x.Id, x.SlotName, x.SlotMultiplicity }).ToListAsync(cancellationToken).ConfigureAwait(false);

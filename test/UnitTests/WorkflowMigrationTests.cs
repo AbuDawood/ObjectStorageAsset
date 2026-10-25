@@ -17,6 +17,52 @@ public sealed partial class WorkflowTests
     private const string ReserveMigration = "20261021052301_ReserveAssetIdentities";
     private const string SplitMigration = "20261021052310_SplitAssetLifecycle";
 
+    [TestCase("osa")]
+    [TestCase("osa]evidence")]
+    public async Task IntegrityEvidenceMigration_ShouldPreserveExistingValidationAndGuardDowngrade(string schema)
+    {
+        const string previous = "20261021055114_RememberPhysicalDeleteIntent";
+        await using var fixture = await SqlServerFixture.CreateAsync(schema: schema, useMigrations: true, targetMigration: previous);
+        using var scope = fixture.RootProvider.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<ObjectStorageAssetDbContext>();
+        var asset = Elf.ObjectStorageAsset.Domain.Entities.ObjectAsset.CreatePendingUpload(Guid.NewGuid(), "order", "files",
+            ObjectAssetSlotMultiplicity.Many, "osa-dev", "test", "upgrade/" + Guid.NewGuid(), "a.txt", ".txt", "text/plain",
+            DateTimeOffset.UtcNow, 4, new string('a', 64));
+        asset.BindOwner(42L);
+        asset.RecordSha256Validation(Sha256ValidationStatus.Mismatch, DateTimeOffset.UtcNow, DateTimeOffset.UtcNow,
+            new string('b', 64), null, "existing-evidence");
+        db.Add(asset); await db.SaveChangesAsync();
+        var version = asset.RowVersion.ToArray();
+        var migrator = db.GetService<IMigrator>(); await migrator.MigrateAsync();
+        (await db.IntegrityEvidence.CountAsync()).Should().Be(0);
+        var preserved = await db.PermanentAssets.AsNoTracking().SingleAsync();
+        preserved.Sha256ValidationStatus.Should().Be(Sha256ValidationStatus.Mismatch);
+        preserved.Sha256ValidationActualHash.Should().Be(new string('b', 64));
+        preserved.RowVersion.Should().Equal(version);
+        Func<Task> down = () => migrator.MigrateAsync(previous);
+        await down.Should().ThrowAsync<SqlException>().WithMessage("*downgrade*blocked*");
+        (await db.IntegrityEvidence.CountAsync()).Should().Be(0);
+        (await db.Database.GetPendingMigrationsAsync()).Should().BeEmpty();
+    }
+
+    [Test]
+    public async Task IntegrityEvidenceDowngrade_ShouldPreserveEvidenceEvenWithoutAssetRows()
+    {
+        await using var fixture = await SqlServerFixture.CreateAsync(useMigrations: true);
+        using var scope = fixture.RootProvider.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<ObjectStorageAssetDbContext>();
+        db.IntegrityEvidence.Add(new Elf.ObjectStorageAsset.Domain.Entities.ObjectAssetIntegrityEvidence
+        {
+            AssetId = Guid.NewGuid(), ExpectedHash = new string('a', 64), Status = Sha256ValidationStatus.Mismatch,
+            AttemptedAtUtc = DateTimeOffset.UtcNow, Error = "rolled-back-upload"
+        });
+        await db.SaveChangesAsync();
+        Func<Task> down = () => db.GetService<IMigrator>().MigrateAsync("20261021055114_RememberPhysicalDeleteIntent");
+        await down.Should().ThrowAsync<SqlException>().WithMessage("*evidence*blocked*");
+        (await db.IntegrityEvidence.CountAsync()).Should().Be(1);
+        (await db.Database.GetPendingMigrationsAsync()).Should().BeEmpty();
+    }
+
     [Test]
     public async Task UpgradeIdempotentScript_ShouldApplyTwiceWithoutChangingData()
     {

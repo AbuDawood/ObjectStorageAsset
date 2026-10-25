@@ -13,7 +13,7 @@ internal sealed class ObjectAssetOwnerBinder(ObjectStorageAssetDbContext db, IOb
         ArgumentNullException.ThrowIfNull(owner);
         var definition = catalog.GetOwner<T>(); var slotDefinition = definition.GetRequiredSlot(slot);
         var key = ObjectAssetOwnerKeyAdapter.NormalizeKey(definition.GetOwnerKey(owner!), definition.OwnerKeyType);
-        if (db.Database.CurrentTransaction is not null)
+        if (db.HasCallerTransaction)
         {
             var ids = slotDefinition.Multiplicity == ObjectAssetSlotMultiplicity.Single
                 ? await lifecycle.BuildOwnerSlotQuery(definition, key, slot.Name).AsNoTracking()

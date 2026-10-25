@@ -19,7 +19,8 @@ internal sealed class ObjectStorageAssetMaintenanceHostedService(
         var intervals = new[] { _runtimeOptions.MaintenanceInterval, _runtimeOptions.Maintenance.InitialRetryDelay,
             _runtimeOptions.Maintenance.ExpiryInterval ?? _runtimeOptions.MaintenanceInterval,
             _runtimeOptions.Maintenance.PendingDeleteInterval ?? _runtimeOptions.MaintenanceInterval,
-            _runtimeOptions.Maintenance.RetryInterval ?? _runtimeOptions.MaintenanceInterval };
+            _runtimeOptions.Maintenance.RetryInterval ?? _runtimeOptions.MaintenanceInterval,
+            _runtimeOptions.Maintenance.IntegrityEvidenceInterval ?? _runtimeOptions.MaintenanceInterval };
         using var timer = new PeriodicTimer(intervals.Min());
 
         while (!stoppingToken.IsCancellationRequested)

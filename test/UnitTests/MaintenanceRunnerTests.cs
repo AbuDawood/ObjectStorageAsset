@@ -18,12 +18,12 @@ public sealed class MaintenanceRunnerTests
         var runner = new ObjectAssetMaintenanceRunner(provider.GetRequiredService<IServiceScopeFactory>(), new Gate(),
             new(), NullLogger<ObjectAssetMaintenanceRunner>.Instance, clock);
         await runner.RunOnceAsync();
-        tasks.Calls.Should().Equal("expiry", "pending", "retry");
-        resolutions.Should().Be(3, "each task must receive a fresh scope");
+        tasks.Calls.Should().Equal("expiry", "pending", "retry", "integrity");
+        resolutions.Should().Be(4, "each task must receive a fresh scope");
         tasks.FailExpiry = false; clock.Now = clock.Now.AddMinutes(16);
         await runner.RunOnceAsync();
-        tasks.Calls.Should().Equal("expiry", "pending", "retry", "expiry", "pending", "retry");
-        resolutions.Should().Be(6);
+        tasks.Calls.Should().Equal("expiry", "pending", "retry", "integrity", "expiry", "pending", "retry", "integrity");
+        resolutions.Should().Be(8);
     }
 
     [Test]
@@ -38,7 +38,7 @@ public sealed class MaintenanceRunnerTests
         await Create().RunOnceAsync();
         tasks.Calls.Should().Equal("expiry");
         tasks.BlockExpiry.SetResult(); await first;
-        tasks.Calls.Should().Equal("expiry", "pending", "retry");
+        tasks.Calls.Should().Equal("expiry", "pending", "retry", "integrity");
     }
 
     private sealed class Clock : TimeProvider
@@ -61,6 +61,7 @@ public sealed class MaintenanceRunnerTests
         }
         public Task<int> PendingCoreAsync(CancellationToken cancellationToken) { Calls.Add("pending"); return Task.FromResult(1); }
         public Task<int> RetryCoreAsync(CancellationToken cancellationToken, DateTimeOffset? failedBefore = null) { Calls.Add("retry"); return Task.FromResult(1); }
+        public Task<int> SynchronizeIntegrityEvidenceAsync(CancellationToken cancellationToken) { Calls.Add("integrity"); return Task.FromResult(1); }
     }
     private sealed class Gate : IObjectAssetMaintenanceLock
     {

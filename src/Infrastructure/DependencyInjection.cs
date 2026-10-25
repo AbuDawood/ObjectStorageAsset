@@ -39,6 +39,7 @@ public static class DependencyInjection
         services.AddSingleton<IObjectAssetNamingService, ObjectAssetNamingService>();
         services.AddScoped<ObjectAssetStorageResolver>();
         services.AddLogging();
+        services.AddSingleton<ObjectAssetIntegrityJournal>();
         services.TryAddSingleton<TimeProvider>(TimeProvider.System);
         services.AddScoped<ObjectAssetIntegrityService>();
         services.AddScoped<IObjectAssetIntegrityService>(sp => sp.GetRequiredService<ObjectAssetIntegrityService>());
