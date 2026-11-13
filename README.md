@@ -1,6 +1,36 @@
 # Elf.ObjectStorageAsset
 
-`Elf.ObjectStorageAsset` is a .NET 8 library for host-managed object storage metadata, lifecycle orchestration, and provider-backed file IO.
+`Elf.ObjectStorageAsset` is a .NET 8 / .NET 10 library for host-managed object storage metadata, lifecycle orchestration, and provider-backed file IO.
+
+## Framework and EF compatibility (0.2.2 candidate)
+
+All six packages ship separate binaries and dependency groups for these combinations:
+
+| Package asset | EF Core dependency range | Runtime qualification |
+| --- | --- | --- |
+| `net8.0` | `>= 8.0.11`, `< 9.0.0` | .NET 8 / EF Core 8.0.11 |
+| `net10.0` | `>= 10.0.15`, `< 11.0.0` | .NET 10 / EF Core 10.0.15 |
+
+NuGet selects the matching framework asset. Keep all OSA packages on the same version and keep EF Core,
+Relational, SQL Server and design-time tools on the same supported EF version. Other EF-major/framework
+combinations are not qualified. In particular, forcing the published 0.2.1 `net8.0` binaries to load under
+EF 10 is unsupported: its bulk-update call sites reference EF 8's removed `SetPropertyCalls<T>` type.
+The new `net10.0` binaries compile those call sites against EF 10's setter API. Dependency upper bounds
+make the supported EF-major boundary explicit; do not override those bounds in a host.
+
+The .NET 8 asset retains MinIO 7's existing Microsoft.Extensions 9.0.4 dependency boundary. The .NET 10
+asset aligns OSA's Microsoft.Extensions references with 10.0.15. No consuming SDK is downgraded.
+Building the multi-target source requires the .NET 10 SDK selected by `global.json`; running the .NET 8
+tests additionally requires a .NET 8 runtime. Use `--framework net8.0` or `--framework net10.0` for runs,
+tests and EF tooling. For EF 10 tooling use a matching `dotnet-ef` 10.0.15 installation.
+
+This compatibility update adds no schema or data migration and changes no published migration IDs.
+Existing schemas and the library-owned migration history remain in place. Snapshot schema resolution
+now follows the configured schema before EF 10 validates it; genuine model drift still fails validation.
+Availability rechecks only establish presence. They never change the expected SHA-256 or bypass a Guard
+read: a restored but corrupt object remains unreadable until its exact expected bytes are restored.
+See [runtime evidence and reproduction](docs/ef10-compatibility.md) and the
+[package-only consumer](test/PackageCompatibility/README.md).
 
 Current implementation state:
 - Layered architecture (`Helpers`, `Domain`, `Application`, `Infrastructure`, `Bootstrap`, `Minio`)
@@ -405,9 +435,9 @@ schema with `--schema`; increase `--command-timeout` for the measured workload. 
 credentials belong in source control.
 
 ```powershell
-dotnet ef database update 20261021052301_ReserveAssetIdentities --project src/Infrastructure --startup-project src/Infrastructure --context ObjectStorageAssetDbContext -- --schema osa --command-timeout 1800
+dotnet ef database update 20261021052301_ReserveAssetIdentities --project src/Infrastructure --startup-project src/Infrastructure --context ObjectStorageAssetDbContext --framework net8.0 -- --schema osa --command-timeout 1800
 # Apply the host FK migration here, if needed.
-dotnet ef database update --project src/Infrastructure --startup-project src/Infrastructure --context ObjectStorageAssetDbContext -- --schema osa --command-timeout 1800
+dotnet ef database update --project src/Infrastructure --startup-project src/Infrastructure --context ObjectStorageAssetDbContext --framework net8.0 -- --schema osa --command-timeout 1800
 ```
 
 The split uses committed batches of 1,000 and checkpoints so interrupted work can resume without
@@ -609,7 +639,7 @@ In-memory E2E environment overrides:
 Typical local flow:
 
 ```powershell
-dotnet run --project .\test\InMemoryE2E\InMemoryE2E.csproj
+dotnet run --project .\test\InMemoryE2E\InMemoryE2E.csproj --framework net8.0
 ```
 
 This path gives you a full host-style OSA workflow against real SQL Server without requiring a live MinIO container.
@@ -863,7 +893,7 @@ Typical local flow:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\test\LiveE2E\start-local-minio.ps1
-dotnet run --project .\test\LiveE2E\LiveE2E.csproj
+dotnet run --project .\test\LiveE2E\LiveE2E.csproj --framework net8.0
 ```
 
 To stop the persistent local MinIO without deleting data:
@@ -916,7 +946,7 @@ Current verification set:
 - `dotnet test test/UnitTests/UnitTests.csproj -m:1`
 - `dotnet test test/DockerMinioE2ETests/DockerMinioE2ETests.csproj -m:1`
 - `dotnet run --project test/ConsoleTest/ConsoleTest.csproj`
-- `dotnet run --project test/InMemoryE2E/InMemoryE2E.csproj`
+- `dotnet run --project test/InMemoryE2E/InMemoryE2E.csproj --framework net8.0`
 - `powershell -ExecutionPolicy Bypass -File test/SmokeTest/run-smoke-test.ps1`
 - `powershell -ExecutionPolicy Bypass -File test/LiveE2E/start-local-minio.ps1`
-- `dotnet run --project test/LiveE2E/LiveE2E.csproj`
+- `dotnet run --project test/LiveE2E/LiveE2E.csproj --framework net8.0`

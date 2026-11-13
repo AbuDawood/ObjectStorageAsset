@@ -33,13 +33,24 @@ foreach ($id in $expected) {
                 throw "Incorrect package identity/version in $path."
             }
             if ($extension -eq 'snupkg') {
-                if (-not @($zip.Entries | Where-Object FullName -Like 'lib/net8.0/*.pdb').Count) {
-                    throw "Missing symbols in $path."
+                foreach ($framework in @('net8.0','net10.0')) {
+                    if (-not @($zip.Entries | Where-Object FullName -Like "lib/$framework/*.pdb").Count) {
+                        throw "Missing $framework symbols in $path."
+                    }
                 }
                 continue
             }
-            foreach ($entry in @('README.md', 'LICENSE', "lib/net8.0/$id.dll")) {
+            foreach ($entry in @('README.md', 'LICENSE', "lib/net8.0/$id.dll", "lib/net10.0/$id.dll")) {
                 if (-not $zip.GetEntry($entry)) { throw "Missing $entry in $path." }
+            }
+            foreach ($group in $metadata.SelectNodes(".//*[local-name()='group']")) {
+                if ($group.targetFramework -notin @('net8.0','net10.0')) { throw "Unexpected dependency target $($group.targetFramework)." }
+                $expectedEfRange = if ($group.targetFramework -eq 'net8.0') { '[8.0.11, 9.0.0)' } else { '[10.0.15, 11.0.0)' }
+                foreach ($dependency in $group.dependency) {
+                    if ($dependency.id -like 'Microsoft.EntityFrameworkCore*' -and $dependency.version -ne $expectedEfRange) {
+                        throw "Unbounded or mismatched EF dependency $($dependency.id): $($dependency.version)."
+                    }
+                }
             }
             foreach ($dependency in $metadata.SelectNodes(".//*[local-name()='dependency']")) {
                 if ($dependency.id -in $expected -and $dependency.version -ne $Version) {
@@ -51,4 +62,4 @@ foreach ($id in $expected) {
     }
 }
 
-Write-Host "Validated six package/symbol pairs at version $Version, including dependencies, README and license."
+Write-Host "Validated six dual-target package/symbol pairs at version $Version, including EF major bounds, dependencies, README and license."

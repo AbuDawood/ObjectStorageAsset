@@ -37,8 +37,11 @@ Do not add references that break these boundaries.
 
 ## 4) Platform Rules
 
-- Target framework: `net8.0`
-- EF Core version: `8.0.11`
+- Package target frameworks: `net8.0;net10.0`; compile each against its own EF-major API.
+- Qualified EF Core versions: `8.0.11` for `net8.0`, `10.0.15` for `net10.0`.
+- Keep EF package families aligned and upper-bounded below the next major; never reuse an EF 8 binary under EF 10.
+- Build with the .NET 10 SDK in `global.json`; install the .NET 8 runtime for legacy-target validation.
+- MinIO 7 retains its Extensions 9.0.4 minimum on net8.0; net10.0 OSA references use Extensions 10.0.15.
 - SQL Server is the persistence provider
 - Public namespaces must start with `Elf.ObjectStorageAsset`
 
@@ -172,12 +175,12 @@ Additional local validation:
 ```powershell
 $env:OSA_TEST_SQL_SERVER = '(localdb)\MSSQLLocalDB'
 $env:OSA_TEST_SQL_INTEGRATED_SECURITY = 'true'
-dotnet test test/UnitTests --filter 'FullyQualifiedName~WorkflowTests'
+dotnet test test/UnitTests --framework net8.0 --filter 'FullyQualifiedName~WorkflowTests'
 $env:OSA_INMEMORY_E2E_SQL_SERVER = '(localdb)\MSSQLLocalDB'
 $env:OSA_INMEMORY_E2E_SQL_INTEGRATED_SECURITY = 'true'
-dotnet run --project test/InMemoryE2E
+dotnet run --project test/InMemoryE2E --framework net8.0
 $env:OSA_SCALE_MAIN_ROWS = '1000000'
-dotnet test test/UnitTests --filter 'FullyQualifiedName~LargeDataset'
+dotnet test test/UnitTests --framework net8.0 --filter 'FullyQualifiedName~LargeDataset'
 ```
 
 These scenarios create and delete uniquely named disposable databases. Do not point them at an
@@ -210,6 +213,14 @@ database transaction or retry provider side effects as part of database deadlock
 The NuGet workflow gates all six packages on the non-scale unit/SQL suite, pinned v0.1.6 binary
 interop, and both E2E runners, using a disposable SQL Server container and a MinIO process built
 from pinned official source on the runner.
+Run the non-scale suite and both runners for **both** qualified targets. Pack with the same candidate
+version used at build time, then execute `.github/scripts/Test-PackageCompatibility.ps1` for each target.
+This copies a consumer into a fresh directory and uses an isolated package cache, source mapping and
+package references only. Also run its `-PublishedReproduction` mode with OSA 0.2.1/net10.0 to preserve
+the negative reproduction. Candidate qualification must test corruption, missing content, an available
+but corrupt recheck, and exact-byte repair against real SQL/MinIO. Never treat build success or a project
+reference test alone as binary compatibility evidence. Keep generated migration/snapshot files intact;
+the context-scoped schema resolver must preserve their type/IDs and must not suppress real model drift.
 Run the opt-in scale scenario separately before a lifecycle/performance release. Never substitute
 a shared SQL Server or object-storage environment for the workflow's local containers.
 

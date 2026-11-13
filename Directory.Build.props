@@ -1,5 +1,21 @@
 <Project>
   <PropertyGroup>
+    <!-- EF bulk-update signatures are binary-incompatible across these major versions. -->
+    <OsaEfCoreVersion>8.0.11</OsaEfCoreVersion>
+    <OsaEfCoreUpperBound>9.0.0</OsaEfCoreUpperBound>
+    <OsaExtensionsVersion>8.0.0</OsaExtensionsVersion>
+    <OsaExtensionsAbstractionsVersion>8.0.2</OsaExtensionsAbstractionsVersion>
+    <!-- MinIO 7 already requires Extensions 9 on its net8.0 target; retain that boundary. -->
+    <OsaMinioExtensionsVersion>9.0.4</OsaMinioExtensionsVersion>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(TargetFramework)' == 'net10.0'">
+    <OsaEfCoreVersion>10.0.15</OsaEfCoreVersion>
+    <OsaEfCoreUpperBound>11.0.0</OsaEfCoreUpperBound>
+    <OsaExtensionsVersion>10.0.15</OsaExtensionsVersion>
+    <OsaExtensionsAbstractionsVersion>10.0.15</OsaExtensionsAbstractionsVersion>
+    <OsaMinioExtensionsVersion>10.0.15</OsaMinioExtensionsVersion>
+  </PropertyGroup>
+  <PropertyGroup>
     <RepositoryUrl>https://github.com/AbuDawood/ObjectStorageAsset</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
     <PublishRepositoryUrl>true</PublishRepositoryUrl>
@@ -23,7 +39,7 @@
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <PackageRequireLicenseAcceptance>false</PackageRequireLicenseAcceptance>
     <PackageReadmeFile>README.md</PackageReadmeFile>
-    <VersionPrefix>0.2.1</VersionPrefix>
+    <VersionPrefix>0.2.2</VersionPrefix>
   </PropertyGroup>
 
   <PropertyGroup Condition="'$(IsSrcProject)' != 'true'">

@@ -187,6 +187,7 @@ public sealed partial class ObjectStorageAssetDbContext : DbContext
     {
         optionsBuilder.ReplaceService<IModelCacheKeyFactory, ObjectStorageAssetModelCacheKeyFactory>();
         optionsBuilder.ReplaceService<Microsoft.EntityFrameworkCore.Migrations.IMigrationsSqlGenerator, ObjectAssetMigrationsSqlGenerator>();
+        optionsBuilder.ReplaceService<Microsoft.EntityFrameworkCore.Migrations.IMigrationsAssembly, ObjectAssetMigrationsAssembly>();
         optionsBuilder.AddInterceptors(IntegrityTransactionInterceptor, IntegrityConnectionInterceptor);
         base.OnConfiguring(optionsBuilder);
     }

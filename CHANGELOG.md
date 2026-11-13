@@ -2,6 +2,24 @@
 
 All notable changes to this project are documented in this file.
 
+## 0.2.2 (unreleased)
+
+### Added
+- Separate net8.0/EF 8 and net10.0/EF 10 package assets and dependency groups across all six packages.
+- Explicit EF-major dependency bounds and consistent EF 10.0.15/Microsoft.Extensions 10.0.15 references on net10.0.
+- Package-only real SQL/MinIO qualification, including a published 0.2.1 negative reproduction and guard-preserving recovery.
+- Dual-target regression/E2E gates, schema-isolation/model-drift checks and synchronous/asynchronous retry coverage.
+
+### Fixed
+- Missing-content and availability updates no longer bind EF 8's removed SetPropertyCalls<T> API under EF 10.
+- Integrity-evidence retry bulk updates are compiled against the matching EF-major API too.
+- EF 10 migration validation resolves the generated snapshot's logical schema to the configured schema without ignoring genuine drift.
+
+### Compatibility
+- Qualified pairs: .NET 8 / EF 8.0.11 and .NET 10 / EF 10.0.15. Other EF-major combinations are unsupported.
+- Existing schema, data, migration IDs, immutable content identities and integrity/availability semantics are preserved.
+- No new database migration; update the OSA package set together. Merge and NuGet publication require separate approval.
+
 ## 0.2.1
 
 ### Added

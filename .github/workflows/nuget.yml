@@ -15,7 +15,9 @@ permissions:
   contents: read
 
 env:
-  DOTNET_VERSION: 8.0.x
+  DOTNET_VERSION: |
+    8.0.x
+    10.0.x
   CONFIGURATION: Release
   PACK_SOLUTION: ObjectStorageAsset.Pack.slnf
 
@@ -107,10 +109,18 @@ jobs:
       - name: Unit, SQL integration and legacy compatibility tests
         env:
           OSA_V016_ASSEMBLY_DIRECTORY: ${{ github.workspace }}/artifacts/legacy/v016
-        run: dotnet test test/UnitTests/UnitTests.csproj --configuration ${{ env.CONFIGURATION }} --no-build --no-restore --filter 'TestCategory!=Scale' --logger 'trx;LogFileName=regression.trx' --results-directory artifacts/test-results
+        shell: bash
+        run: |
+          for framework in net8.0 net10.0; do
+            dotnet test test/UnitTests/UnitTests.csproj --framework "$framework" --configuration ${{ env.CONFIGURATION }} --no-build --no-restore --filter 'TestCategory!=Scale' --logger "trx;LogFileName=regression-$framework.trx" --results-directory artifacts/test-results
+          done
 
       - name: In-memory provider E2E with real SQL
-        run: dotnet run --project test/InMemoryE2E --configuration ${{ env.CONFIGURATION }} --no-build --no-restore
+        shell: bash
+        run: |
+          for framework in net8.0 net10.0; do
+            dotnet run --project test/InMemoryE2E --framework "$framework" --configuration ${{ env.CONFIGURATION }} --no-build --no-restore
+          done
 
       - name: Checkout pinned MinIO source
         uses: actions/checkout@v4
@@ -149,7 +159,11 @@ jobs:
           exit 1
 
       - name: Real MinIO E2E with real SQL
-        run: dotnet run --project test/LiveE2E --configuration ${{ env.CONFIGURATION }} --no-build --no-restore
+        shell: bash
+        run: |
+          for framework in net8.0 net10.0; do
+            dotnet run --project test/LiveE2E --framework "$framework" --configuration ${{ env.CONFIGURATION }} --no-build --no-restore
+          done
 
       - name: Pack
         run: dotnet pack ${{ env.PACK_SOLUTION }} --configuration ${{ env.CONFIGURATION }} --no-build --output ./artifacts/nuget -m:1 /p:ContinuousIntegrationBuild=true /p:Version=${{ steps.version.outputs.package_version }}
@@ -158,12 +172,27 @@ jobs:
         shell: pwsh
         run: .github/scripts/Test-Packages.ps1 -PackageDirectory artifacts/nuget -Version '${{ steps.version.outputs.package_version }}'
 
+      - name: Reproduce published 0.2.1 binary failure under EF 10
+        shell: pwsh
+        run: .github/scripts/Test-PackageCompatibility.ps1 -Version '0.2.1' -Framework net10.0 -PublishedReproduction
+
+      - name: Qualify packed candidate through clean consumers
+        shell: pwsh
+        run: |
+          foreach ($framework in @('net8.0','net10.0')) {
+            .github/scripts/Test-PackageCompatibility.ps1 -Version '${{ steps.version.outputs.package_version }}' -Framework $framework -PackageDirectory artifacts/nuget
+          }
+
       - name: Upload test results
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: tests-${{ github.run_number }}-${{ github.run_attempt }}
-          path: artifacts/test-results/*.trx
+          path: |
+            artifacts/test-results/*.trx
+            artifacts/pq/**/runtime.log
+            artifacts/pq/**/build.log
+            artifacts/pq/**/restore.log
           if-no-files-found: ignore
 
       - name: Upload packages
