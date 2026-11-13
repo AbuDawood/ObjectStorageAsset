@@ -2,7 +2,7 @@
 
 `Elf.ObjectStorageAsset` is a .NET 8 / .NET 10 library for host-managed object storage metadata, lifecycle orchestration, and provider-backed file IO.
 
-## Framework and EF compatibility (0.2.2 candidate)
+## Framework and EF compatibility (0.2.2)
 
 All six packages ship separate binaries and dependency groups for these combinations:
 

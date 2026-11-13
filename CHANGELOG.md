@@ -2,7 +2,7 @@
 
 All notable changes to this project are documented in this file.
 
-## 0.2.2 (unreleased)
+## 0.2.2
 
 ### Added
 - Separate net8.0/EF 8 and net10.0/EF 10 package assets and dependency groups across all six packages.
