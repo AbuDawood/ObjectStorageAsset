@@ -93,15 +93,29 @@ Only after these checks pass does the workflow build and pack
 It checks all six package/symbol pairs and embeds this README and the license in every package.
 
 Publishing flow:
-- Configure the existing `NUGET_API_KEY` repository secret with permission to publish all six packages.
+- Use [NuGet Trusted Publishing](https://learn.microsoft.com/en-us/nuget/nuget-org/trusted-publishing):
+  repository owner `AbuDawood`, repository `ObjectStorageAsset`, workflow **`nuget.yml`** (filename only),
+  environment **`production`**, package pattern `Elf.ObjectStorageAsset*`, and push scope.
+  The publishing job uses NuGet profile `Abudawood`, `NuGet/login@v1`, and a short-lived key;
+  no stored `NUGET_API_KEY` is used. Keep GitHub's `production` environment restricted to release
+  tags and `main`, with any required deployment reviewers configured there.
 - Review the [v0.1.6 upgrade procedure](#upgrade-from-v016) before adopting v0.2.0. Publishing a package does not migrate any host database.
-- Merge the tested release changes into `main`, with `VersionPrefix` set to `0.2.0`.
-- Push the new `v0.2.0` tag at that merged commit. Tags must exactly match `VersionPrefix` and belong to `main`.
+- Merge the tested release changes into `main`, with the intended `VersionPrefix` (currently `0.2.2`).
+- Push the new matching tag (for example, `v0.2.2`) at that merged commit. Tags must exactly match `VersionPrefix` and belong to `main`.
 - The workflow repeats validation, uploads the packages as a workflow artifact, then publishes the `.nupkg` and `.snupkg` files to NuGet.org.
 
-Pull requests, untagged `main` pushes and manual runs produce downloadable CI packages without
-publishing. Their version includes the run number and attempt. Never move an existing release tag
-or reuse a published package version; correct a published release with a new version.
+Pull requests, untagged `main` pushes and manual runs with an empty `publish_run_id` only validate and
+upload CI packages. Their version includes the run number and attempt. These jobs have no OIDC write permission.
+
+To recover a publication failure, run **NuGet** manually on **`main`**, setting `publish_run_id` to the
+original qualified tag run ID. This downloads that run's immutable package/symbol artifact without
+rebuilding or moving the tag. It verifies the source repository, workflow, tag/commit, membership in
+`main`, successful SQL/MinIO and clean-consumer checks, artifact attempt/expiry, archive SHA-256,
+exact package set, versions, repository commit and EF bounds before requesting a publishing key.
+Recovery fails if those checks or the original artifact are unavailable; it never substitutes a PR
+artifact or newly rebuilt bytes. `--skip-duplicate` supports partial publication retries.
+Never move an existing release tag or reuse a published package version; correct a published release
+with a new version. Publishing and recovery do not execute any host database migration.
 
 ## License
 

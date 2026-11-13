@@ -1,6 +1,7 @@
 param(
     [Parameter(Mandatory)][string] $PackageDirectory,
-    [Parameter(Mandatory)][string] $Version
+    [Parameter(Mandatory)][string] $Version,
+    [string] $ExpectedRepositoryCommit
 )
 
 $ErrorActionPreference = 'Stop'
@@ -31,6 +32,11 @@ foreach ($id in $expected) {
             $metadata = $manifest.package.metadata
             if ($metadata.id -ne $id -or $metadata.version -ne $Version) {
                 throw "Incorrect package identity/version in $path."
+            }
+            if ($ExpectedRepositoryCommit -and
+                ($metadata.repository.commit -cne $ExpectedRepositoryCommit -or
+                 $metadata.repository.url -ine 'https://github.com/AbuDawood/ObjectStorageAsset')) {
+                throw "Incorrect repository provenance in $path."
             }
             if ($extension -eq 'snupkg') {
                 foreach ($framework in @('net8.0','net10.0')) {

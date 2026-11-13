@@ -10,6 +10,12 @@ on:
     tags:
       - "v*"
   workflow_dispatch:
+    inputs:
+      publish_run_id:
+        description: 'Recovery only: original qualified tag run ID. Leave blank for validation only.'
+        type: string
+        required: false
+        default: ''
 
 permissions:
   contents: read
@@ -23,6 +29,7 @@ env:
 
 jobs:
   pack:
+    if: github.event_name != 'workflow_dispatch' || inputs.publish_run_id == ''
     runs-on: ubuntu-latest
     timeout-minutes: 25
 
@@ -69,6 +76,10 @@ jobs:
         uses: actions/setup-dotnet@v4
         with:
           dotnet-version: ${{ env.DOTNET_VERSION }}
+
+      - name: Test release artifact safeguards
+        shell: pwsh
+        run: .github/scripts/Test-ReleaseArtifact.ps1
 
       - name: Compute package version
         id: version
@@ -204,20 +215,6 @@ jobs:
             artifacts/nuget/*.nupkg
             artifacts/nuget/*.snupkg
 
-      - name: Publish to NuGet.org
-        if: github.event_name == 'push' && github.ref_type == 'tag'
-        env:
-          NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
-        shell: bash
-        run: |
-          if [[ -z "${NUGET_API_KEY}" ]]; then
-            echo "NUGET_API_KEY is not set."
-            exit 1
-          fi
-
-          dotnet nuget push "artifacts/nuget/*.nupkg" --api-key "${NUGET_API_KEY}" --source "https://api.nuget.org/v3/index.json" --skip-duplicate --no-symbols
-          dotnet nuget push "artifacts/nuget/*.snupkg" --api-key "${NUGET_API_KEY}" --source "https://api.nuget.org/v3/index.json" --skip-duplicate
-
       - name: Stop disposable MinIO
         if: always()
         shell: bash
@@ -225,3 +222,64 @@ jobs:
           if [[ -f artifacts/minio.pid ]]; then
             kill "$(cat artifacts/minio.pid)" 2>/dev/null || true
           fi
+
+  publish:
+    needs: pack
+    # Recovery runs use the updated workflow on main without moving the release tag.
+    if: >-
+      always() && !cancelled() &&
+      ((github.event_name == 'push' && github.ref_type == 'tag' && needs.pack.result == 'success') ||
+       (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.publish_run_id != ''))
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: production
+    concurrency:
+      group: nuget-production
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+    steps:
+      - name: Checkout publishing tools
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Test release artifact safeguards
+        shell: pwsh
+        run: .github/scripts/Test-ReleaseArtifact.ps1
+
+      - name: Verify and download qualified release artifacts
+        id: release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_RUN_ID: ${{ inputs.publish_run_id || github.run_id }}
+        run: .github/scripts/Get-ReleaseArtifact.ps1 -RunId $env:SOURCE_RUN_ID -PackageDirectory artifacts/publish
+
+      - name: NuGet login with Trusted Publishing
+        uses: NuGet/login@v1
+        id: login
+        with:
+          user: Abudawood
+
+      - name: Publish verified packages to NuGet.org
+        shell: pwsh
+        env:
+          NUGET_API_KEY: ${{ steps.login.outputs.NUGET_API_KEY }}
+        run: |
+          foreach ($package in Get-ChildItem artifacts/publish -Filter '*.nupkg' | Sort-Object Name) {
+            dotnet nuget push $package.FullName --api-key "$env:NUGET_API_KEY" --source https://api.nuget.org/v3/index.json --skip-duplicate --no-symbols
+            if ($LASTEXITCODE -ne 0) { throw "Package publication failed: $($package.Name)" }
+          }
+          foreach ($package in Get-ChildItem artifacts/publish -Filter '*.snupkg' | Sort-Object Name) {
+            dotnet nuget push $package.FullName --api-key "$env:NUGET_API_KEY" --source https://api.nuget.org/v3/index.json --skip-duplicate
+            if ($LASTEXITCODE -ne 0) { throw "Symbol publication failed: $($package.Name)" }
+          }

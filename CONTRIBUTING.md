@@ -227,6 +227,15 @@ a shared SQL Server or object-storage environment for the workflow's local conta
 Set `VersionPrefix` and the changelog together. Build and pack with the same `/p:Version` value;
 validate the output using `.github/scripts/Test-Packages.ps1 -PackageDirectory artifacts/nuget
 -Version <version>`. Merge through a PR, then create a matching new `v<VersionPrefix>` tag on `main`.
-Only a tag push publishes; PRs and manual workflow runs only upload artifacts. NuGet publication
-can partially succeed across packages; the workflow supports retrying the same immutable artifacts
-with `--skip-duplicate`, while corrections require a new release version.
+Tag pushes publish after qualification through the separate `production` job using NuGet Trusted
+Publishing (`NuGet/login@v1`); only this job has `id-token: write`. Configure the NuGet policy with
+workflow filename `nuget.yml`, environment `production`, and pattern `Elf.ObjectStorageAsset*`.
+No long-lived NuGet key is used. Preserve environment protection/reviewer rules.
+
+PRs and ordinary manual runs only validate/upload artifacts. A manual run on `main` with an explicit
+`publish_run_id` recovers the original qualified tag artifact. It verifies successful release gates,
+source/tag/main ancestry, attempt provenance, archive SHA-256 and package metadata before login.
+Run `.github/scripts/Test-ReleaseArtifact.ps1` when changing this boundary. Do not weaken these
+checks to accommodate an unqualified run, rebuild a tagged release, or move an existing tag.
+NuGet publication can partially succeed across packages; retry the same immutable artifacts with
+`--skip-duplicate`, while corrections require a new release version.
