@@ -876,12 +876,13 @@ public sealed partial class WorkflowTests
                     DataSource = server,
                     InitialCatalog = databaseName,
                     IntegratedSecurity = true,
+                    ApplicationName = "OSA.WorkflowTests",
                     TrustServerCertificate = true
                 }.ConnectionString;
             var userId = Environment.GetEnvironmentVariable("OSA_TEST_SQL_USER") ?? "sa";
             var password = Environment.GetEnvironmentVariable("OSA_TEST_SQL_PASSWORD") ?? "Password@123";
 
-            return $"Server={server};Database={databaseName};User ID={userId};Password={password};TrustServerCertificate=True;";
+            return $"Server={server};Database={databaseName};User ID={userId};Password={password};TrustServerCertificate=True;Application Name=OSA.WorkflowTests;";
         }
     }
 
